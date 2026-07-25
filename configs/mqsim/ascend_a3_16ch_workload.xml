@@ -10,11 +10,11 @@
             <Chip_IDs>0,1,2,3</Chip_IDs>
             <!-- 2 die per chip -->
             <Die_IDs>0,1</Die_IDs>
-            <!-- 6 plane per die (YMTC 232L 2×3 Center X-DEC) -->
+            <!-- 6 planes per model die; inferred proxy geometry, not an official BOM. -->
             <Plane_IDs>0,1,2,3,4,5</Plane_IDs>
             <Initial_Occupancy_Percentage>50</Initial_Occupancy_Percentage>
-            <!-- Replace with actual trace file path -->
-            <File_Path>/mnt/d/Code/storage_mem_sim/media/mqsim_wrapper/MQSim/trace_test.trace</File_Path>
+            <!-- Replaced with the generated trace path by the Python wrapper. -->
+            <File_Path>traces/tpcc-small.trace</File_Path>
             <Percentage_To_Be_Executed>100</Percentage_To_Be_Executed>
             <Relay_Count>1</Relay_Count>
             <Time_Unit>NANOSECOND</Time_Unit>

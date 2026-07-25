@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import unittest
 import sys
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 from ..memory_type import MemoryRequestType
@@ -197,6 +198,7 @@ class TestConfigLoading(unittest.TestCase):
             os.path.dirname(__file__), "..", "configs", "mqsim"
         )
         cls._ssd = os.path.join(d, "default_ssdconfig.xml")
+        cls._a3_ssd = os.path.join(d, "ascend_a3_16ch_ssdconfig.xml")
 
     def setUp(self):
         from ..media.mqsim_wrapper.pymqsim import trace as C
@@ -213,6 +215,40 @@ class TestConfigLoading(unittest.TestCase):
         self.assertEqual(C.SECTORS_PER_PAGE, 16)
         self.assertEqual(C.TOTAL_PLANES, 128)
         self.assertTrue(C._loaded)
+
+    def test_a3_proxy_matches_es3600p_v7_calibration_targets(self):
+        """A3 proxy uses official ES3600P V7 endpoints and inferred geometry."""
+        from ..media.mqsim_wrapper.pymqsim import performance_model as model
+
+        self.C.load_from_ssdconfig_xml(self._a3_ssd)
+        self.assertEqual(self.C.CHANNELS, 16)
+        self.assertEqual(self.C.PCIE_LANE_COUNT, 4)
+        self.assertEqual(self.C.PCIE_LANE_BW_GBPS, 4.0)
+        self.assertEqual(self.C.PAGE_SIZE_BYTES, 16384)
+        self.assertAlmostEqual(
+            model.theory_iops(4096), 3_450_000, delta=20_000
+        )
+
+        root = ET.parse(self._a3_ssd).getroot()
+        self.assertEqual(
+            root.findtext(".//Flash_Technology"), "TLC"
+        )
+        blocks_per_plane = int(
+            root.findtext(".//Block_No_Per_Plane")
+        )
+        overprovisioning = float(
+            root.findtext(".//Overprovisioning_Ratio")
+        )
+        logical_capacity = (
+            self.C.TOTAL_PLANES
+            * blocks_per_plane
+            * self.C.PAGES_PER_BLOCK
+            * self.C.PAGE_SIZE_BYTES
+            * (1 - overprovisioning)
+        )
+        self.assertAlmostEqual(
+            logical_capacity, 3.2e12, delta=5e9
+        )
 
     def test_unloaded_raises(self):
         """Functions raise RuntimeError before XML is loaded."""

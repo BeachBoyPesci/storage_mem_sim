@@ -1,58 +1,78 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ╔══════════════════════════════════════════════════════════════════════════╗
-  ║            Huawei Ascend A3 16CH — Enterprise NVMe SSD Config            ║
+  ║       Ascend A3 local-NVMe proxy — Huawei ES3600P V7 3.2 TB             ║
   ╚══════════════════════════════════════════════════════════════════════════╝
 
-  ── 资料来源 ─────────────────────────────────────────────────────────────
-  · YMTC 232L Xtacking 3.0 3D TLC NAND (YMTC = 长江存储)
-    IEICE 2023-2024 paper: "A 232-layer Xtacking 3.0 3D TLC NAND Flash"
-    关键参数: 6-plane (2×3 Center X-DEC), 16 KB page, tR=37/45/37 µs
-  · Memblaze PBlaze7 7A46 (国产企业级 NVMe SSD, 参考对标)
-    PCIe Gen5 ×4, ~16 GB/s host interface, ~15 TB capacity class
-  · 华为昇腾 A3 服务器 SSD 子系统 — 16CH 旗舰控制器
+  ── 模型边界 ─────────────────────────────────────────────────────────────
+  本文件模拟一块可用于 Ascend A3 服务器的 ES3600P V7 3.2 TB NVMe SSD，
+  不是 Ascend A3 整机的八盘聚合模型，也不宣称还原该 SSD 未公开的 NAND
+  channel / package / die / plane 物理组织。
 
-  ── NAND 几何 ─────────────────────────────────────────────────────────────
-    CHANNELS          = 16        flash 通道数
-    CHIPS_PER_CH      =  4        每通道 NAND 封装数 (Chip / Way)
-    DIES_PER_CHIP     =  2        每封装晶粒数
-    PLANES_PER_DIE    =  6        每晶粒平面数 (YMTC 232L: 2×3 Center X-DEC)
+  Atlas 800I/800T A3 官方资料公开的是整机拓扑：单机最大支持
+  8 × 2.5-inch NVMe + 2 × 2.5-inch SATA，NVMe 通过 CPU 直出 PCIe 连接；
+  其白皮书将 SSD 规格指向《ES3000 V7 NVMe PCIe SSD 用户指南》。
+
+  ── 官方资料来源（查询日期：2026-07-25）─────────────────────────────────
+  [1] Huawei Atlas 800I A3 SuperPoD Technical White Paper, document 07:
+      https://e.huawei.com/cn/documents/products/computing/5f99170196404c5f90a7d0638c613652.html
+  [2] Huawei ES3000 series NVMe SSD official product specification:
+      https://e.huawei.com/cn/products/computing/kunpeng/components/nvmessd
+  [3] ES3000 V7 Series NVMe SSD brochure:
+      https://e.huawei.com/cn/documents/solutions/computing/396fa5acac9344098956958887cbf78e.html
+
+  ── ES3600P V7 3.2 TB 官方端点规格 ───────────────────────────────────────
+    Form factor        = U.2, 2.5-inch, 15 mm
+    Host interface     = PCIe 5.0 ×4
+    Protocol           = NVMe 2.0
+    NAND type          = 3D TLC
+    Capacity           = 3,200 GB
+    Sequential R/W     = up to 14,800 / 11,000 MB/s
+    Random R/W @ 4 KB  = up to 3,450K / 900K IOPS
+    Average R/W @ QD1  = 55 / 7 µs
+    Endurance          = 3 DWPD for 5 years
+
+  上述值是整盘端到端指标。MQSim XML 无法直接用这些指标反推出 NAND 几何；
+  下列内部参数是为了逼近官方容量、随机读 IOPS 和顺序读带宽而采用的校准假设。
+
+  ── MQSim 内部校准几何（非官方 BOM）──────────────────────────────────────
+    CHANNELS          = 16        由 14.8 GB/s 端点目标和 1 GB/s/ch 上限推导
+    CHIPS_PER_CH      =  4        并行度假设
+    DIES_PER_CHIP     =  2        并行度假设
+    PLANES_PER_DIE    =  6        并行度/容量假设
     ─────────────────────────────────────────
     TOTAL_DIES        = 16×4×2 = 128
     TOTAL_PLANES      = 128×6  = 768
 
-  ── Page / Block / Plane 层级 ─────────────────────────────────────────────
-    PAGE_SIZE_BYTES   = 16,384 B (16 KB) + 1,942 B metadata
-    PAGES_PER_BLOCK   = 576 (TLC: 192 wordlines × 3 bits/cell)
-    BLOCKS_PER_PLANE  = 512 (MQSim 仿真限制, 实际 ~2000+)
+  ── 容量校准（非官方 NAND 几何）──────────────────────────────────────────
+    PAGE_SIZE_BYTES   = 16,384 B + 1,942 B metadata (建模假设)
+    PAGES_PER_BLOCK   = 576 (建模假设)
+    BLOCKS_PER_PLANE  = 475 (按 3.2 TB logical capacity 校准)
     ─────────────────────────────────────────
     每 Block 容量       = 576 × 16 KB ≈ 9.2 MB
-    每 Plane 容量       = 512 × 9.2 MB ≈ 4.7 GB
-    每 Die 容量         = 6 × 4.7 GB ≈ 28.3 GB
-    Raw NAND 总容量     = 128 × 28.3 GB ≈ 3,622 GB ≈ 3.6 TB
-    User 容量 (OP=7%)   ≈ 3,622 / 1.07 ≈ 3,385 GB ≈ 3.3 TB
-    注: 实际 YMTC 232L 单 die 512 Gb (64 GB), 此处 BLOCKS_PER_PLANE=512
-         为 MQSim 仿真内存约束的缩减值
+    Raw NAND 总容量     = 16×4×2×6×475×576×16 KB
+                        ≈ 3,443 GB
+    Logical capacity   = Raw × (1 - OP) = 3,443 × 0.93
+                        ≈ 3,202 GB ≈ 3.2 TB
 
-  ── 时序参数 ───────────────────────────────────────────────────────────────
-    NAND 读 (tR)       = 37,000 / 45,000 / 37,000 ns (LSB / CSB / MSB)
-                         YMTC 232L IEICE 论文值
-    NAND 写 (tProg)    = 390,000 ns (TLC, 参考 Samsung PM9A3)
-    NAND 擦除 (tErase) = 3,500,000 ns (3D TLC 典型值)
+  ── 时序校准（非官方 NAND 时序）──────────────────────────────────────────
+    NAND 读 (tR)       = 37,000 / 45,000 / 37,000 ns
+                         使 128 dies / 37 µs ≈ 3.46M read IOPS，
+                         接近官方 3.45M @ 4 KB 端点指标
+    NAND 写 (tProg)    = 390,000 ns (TLC 建模假设)
+    NAND 擦除 (tErase) = 3,500,000 ns (TLC 建模假设)
     Channel BW         = 1,000 MB/s/ch (MQSim integer-ns timing limit)
     Total Channel BW   = 16 × 1,000 = 16,000 MB/s = 16.0 GB/s
-    Flash 协议          = NVDDR2 (ONFI 3.x timing: CMD=290ns, Setup=30ns)
-                         注: YMTC 232L 支持 NVDDR3 (ONFI 4.x, 2400 MT/s),
-                         MQSim 不支持 NVDDR3, 故降级使用 NVDDR2
-    P/E Cycles         = 3,000 (企业级 TLC)
+    Flash protocol     = NVDDR2 (MQSim 可表达的协议模型，不代表实盘协议)
+    P/E Cycles         = 3,000 (寿命模型假设；不等同于官方 3 DWPD)
 
-  ── Host 接口 ──────────────────────────────────────────────────────────────
-    PCIe Gen5 ×4       ≈ 16 GB/s (4 lanes × 4 GB/s/lane)
-    NVMe Queue Depth   = 65,535
-    DRAM Cache         = 2 GB (ADVANCED, SHARED)
-    CMT (Cache Mapping Table) = 16M entries (与容量成比例)
+  ── Host / controller 建模 ─────────────────────────────────────────────────
+    PCIe Gen5 ×4       = 官方接口；MQSim 配置为 4 GB/s/lane
+    NVMe Queue Depth   = 65,535 (协议上限假设，非官方实盘队列实测值)
+    DRAM Cache         = 2 GB (建模假设，官方未披露)
+    CMT Capacity       = 16 MiB (MQSim 字段单位为 byte；建模假设)
 
-  ── FTL / GC 配置 ──────────────────────────────────────────────────────────
+  ── FTL / GC 配置（均为建模假设）──────────────────────────────────────────
     Address Mapping    = PAGE_LEVEL
     Plane Allocation   = CWDP (Channel → Way/Chip → Die → Plane)
     GC Policy          = RGA (Greedy), threshold 5%, hard threshold 0.5%
@@ -76,15 +96,18 @@
      32 KB      483,559     15,845 MB/s (15.8 GB/s)   99.0%   BW-Bound
     128 KB      121,773     15,961 MB/s (16.0 GB/s)   99.8%   BW-Bound
     ─────────────────────────────────────────────────────────────
-    峰值 BW ≈ 16.0 GB/s (受单通道速率与 PCIe Gen5 ×4 上限共同约束)
+    MQSim 内部峰值 BW ≈ 16.0 GB/s；官方整盘顺序读目标为 14.8 GB/s。
+    由于 MQSim 的 channel period 采用整数 ns，无法把单通道精确配置成
+    925 MB/s；端点差异应通过 native 仿真结果验证，不能把 16.0 GB/s
+    解释为 ES3600P V7 官方额定值。
 
-    解读: 4KB 已接近通道带宽上限，8KB 及以上主要为 BW-Bound。
-          16KB 恰好等于 NAND page size, 无读放大。
+    解读: 4 KB 理论读 IOPS 与官方 3.45M 目标接近；8 KB 及以上主要为
+          bandwidth-bound。16 KB 仅是本代理模型的 NAND page 假设。
 
 -->
 <Execution_Parameter_Set>
     <Host_Parameter_Set>
-        <!-- PCIe Gen5 ×4: ~4 GB/s/lane → ~16 GB/s total (Memblaze PBlaze7 7A46 class) -->
+        <!-- ES3600P V7 official host interface: PCIe 5.0 x4. -->
         <PCIe_Lane_Bandwidth>4.00000</PCIe_Lane_Bandwidth>
         <PCIe_Lane_Count>4</PCIe_Lane_Count>
         <SATA_Processing_Delay>400000</SATA_Processing_Delay>
@@ -100,7 +123,7 @@
         <Queue_Fetch_Size>512</Queue_Fetch_Size>
         <Caching_Mechanism>ADVANCED</Caching_Mechanism>
         <Data_Cache_Sharing_Mode>SHARED</Data_Cache_Sharing_Mode>
-        <!-- DRAM write cache: 2 GB -->
+        <!-- Assumption: Huawei does not publish the ES3600P V7 DRAM capacity. -->
         <Data_Cache_Capacity>2147483648</Data_Cache_Capacity>
         <Data_Cache_DRAM_Row_Size>8192</Data_Cache_DRAM_Row_Size>
         <Data_Cache_DRAM_Data_Rate>100</Data_Cache_DRAM_Data_Rate>
@@ -110,7 +133,7 @@
         <Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
         <Address_Mapping>PAGE_LEVEL</Address_Mapping>
         <Ideal_Mapping_Table>false</Ideal_Mapping_Table>
-        <!-- CMT: 16M entries (doubled from 8CH 8M, proportional to capacity) -->
+        <!-- Assumption: 16 MiB mapping-table cache; MQSim unit is bytes. -->
         <CMT_Capacity>16777216</CMT_Capacity>
         <CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
         <Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
@@ -128,42 +151,43 @@
         <Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
         <Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
         <!-- ════════════════════════════════════════════════════════════ -->
-        <!-- NAND Flash: 16CH flagship controller                        -->
-        <!-- Total: 16 CH × 4 chip × 2 die × 6 plane = 768 planes        -->
+        <!-- Endpoint-calibrated proxy; the physical NAND BOM is not public. -->
+        <!-- Total model geometry: 16 CH x 4 chip x 2 die x 6 plane.      -->
         <!-- ════════════════════════════════════════════════════════════ -->
         <Flash_Channel_Count>16</Flash_Channel_Count>
         <Flash_Channel_Width>1</Flash_Channel_Width>
-        <!-- MQSim uses integer-ns channel periods; values above 1000 collapse to 0ns. -->
+        <!-- 16 x 1000 MB/s provides headroom for the official 14.8 GB/s read target. -->
+        <!-- MQSim integer-ns channel periods cannot express rates above 1000 MB/s. -->
         <Channel_Transfer_Rate>1000</Channel_Transfer_Rate>
         <Chip_No_Per_Channel>4</Chip_No_Per_Channel>
-        <!-- NVDDR2: CMD=290ns, Setup=30ns (ONFI 3.x timing; MQSim does not support NVDDR3) -->
+        <!-- MQSim protocol proxy; this is not an ES3600P V7 protocol disclosure. -->
         <Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
         <Flash_Parameter_Set>
-            <!-- YMTC 232L Xtacking 3.0 3D TLC NAND -->
+            <!-- 3D TLC is official; all following internal geometry/timing is inferred. -->
             <Flash_Technology>TLC</Flash_Technology>
             <CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
-            <!-- YMTC 232L read latency: LSB/CSB/MSB (IEICE 2023-2024 paper) -->
+            <!-- Calibrated so 128 model dies / 37us ~= official 3.45M read IOPS. -->
             <Page_Read_Latency_LSB>37000</Page_Read_Latency_LSB>
             <Page_Read_Latency_CSB>45000</Page_Read_Latency_CSB>
             <Page_Read_Latency_MSB>37000</Page_Read_Latency_MSB>
-            <!-- TLC program latency (ref Samsung PM9A3 TLC: ~390 µs) -->
+            <!-- TLC program-latency assumption; not disclosed by Huawei. -->
             <Page_Program_Latency_LSB>390000</Page_Program_Latency_LSB>
             <Page_Program_Latency_CSB>390000</Page_Program_Latency_CSB>
             <Page_Program_Latency_MSB>390000</Page_Program_Latency_MSB>
-            <!-- Block erase latency (typical 3D TLC: 3.5 ms) -->
+            <!-- TLC erase-latency assumption; not disclosed by Huawei. -->
             <Block_Erase_Latency>3500000</Block_Erase_Latency>
-            <!-- TLC P/E cycles: ~3,000 (YMTC 232L, enterprise grade) -->
+            <!-- Lifetime-model assumption; official endurance is 3 DWPD for 5 years. -->
             <Block_PE_Cycles_Limit>3000</Block_PE_Cycles_Limit>
             <Suspend_Erase_Time>700000</Suspend_Erase_Time>
             <Suspend_Program_Time>100000</Suspend_Program_Time>
-            <!-- YMTC 232L geometry: 6-plane (2×3 Center X-DEC layout) -->
+            <!-- Package/die/plane counts are model parallelism assumptions. -->
             <Die_No_Per_Chip>2</Die_No_Per_Chip>
             <Plane_No_Per_Die>6</Plane_No_Per_Die>
-            <!-- Blocks per plane: 512 (reduced for MQSim memory; see header for guidance) -->
-            <Block_No_Per_Plane>512</Block_No_Per_Plane>
-            <!-- Pages per block: 576 (typical TLC block, ~9.2 MB) -->
+            <!-- 475 blocks/plane calibrates MQSim logical capacity to about 3.2 TB. -->
+            <Block_No_Per_Plane>475</Block_No_Per_Plane>
+            <!-- Pages per block is a capacity-model assumption. -->
             <Page_No_Per_Block>576</Page_No_Per_Block>
-            <!-- Page size: 16 KB + 1,942 B metadata (YMTC 232L, IEICE paper) -->
+            <!-- NAND page and metadata sizes are model assumptions, not NVMe LBA sizes. -->
             <Page_Capacity>16384</Page_Capacity>
             <Page_Metadat_Capacity>1942</Page_Metadat_Capacity>
         </Flash_Parameter_Set>

@@ -118,7 +118,7 @@ for size in [4096, 8192, 32768, 65536, 131072]:
 configs/mqsim/
 ├── default_ssdconfig.xml      # 默认 SSD 设备配置（NAND 几何参数来源）
 ├── default_workload.xml       # 默认 workload 模板
-├── ascend_a3_16ch_*.xml       # Ascend A3 代理模型与 workload 配置
+├── ascend_a3_16ch_*.xml       # A3/ES3600P V7 3.2TB 校准代理模型
 └── pm1753_*.xml               # PM1753 代理模型与 workload 配置
 
 media/mqsim_wrapper/
