@@ -115,16 +115,21 @@ for size in [4096, 8192, 32768, 65536, 131072]:
 ### 项目结构
 
 ```
+configs/
+├── default_ssdconfig.xml      # 默认 SSD 设备配置（NAND 几何参数来源）
+├── default_workload.xml       # 默认 workload 模板
+├── ascend_a3_16ch_*.xml       # Ascend A3 SSD 与 workload 配置
+└── pm1753_*.xml               # PM1753 SSD 与 workload 配置
+
 media/mqsim_wrapper/
 ├── pymqsim/                   # Python 库
 │   ├── __init__.py            # 公开 API（27 个符号）
-│   ├── trace.py               # 几何常量 + CWDP + 理论公式 + trace 生成
+│   ├── trace.py               # 几何常量 + CWDP + trace 生成
+│   ├── performance_model.py   # 理论 IOPS、带宽和总线利用率
 │   ├── workload.py            # generate_workload_xml — workload XML 生成
 │   ├── simulator.py           # run_simulation — 仿真运行器（native + subprocess）
 │   └── output.py              # MQSimResult — 输出 XML 解析
 ├── MQSim/                     # MQSim C++ 子模块
-├── default_ssdconfig.xml      # 默认 SSD 设备配置（NAND 几何参数来源）
-├── default_workload.xml       # 默认 workload 模板
 ├── mqsim_pybind.cpp           # pybind11 C++ 桥接
 ├── CMakeLists.txt             # C++ 构建脚本
 ├── setup.py                   # pip install 入口

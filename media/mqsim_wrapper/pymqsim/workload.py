@@ -8,7 +8,9 @@ import os
 import re
 
 _DEFAULT_TEMPLATE = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "default_workload.xml"
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+    "configs",
+    "default_workload.xml",
 )
 
 
@@ -18,8 +20,8 @@ def generate_workload_xml(trace_path, output_path, template_path=None):
     Args:
         trace_path: Absolute path to the MQSim trace file.
         output_path: Where to write the generated workload XML.
-        template_path: Optional custom template.  Falls back to the
-                       bundled default_workload.xml.
+        template_path: Optional custom template. Falls back to
+                       configs/default_workload.xml.
 
     Returns:
         The *output_path*.
