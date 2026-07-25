@@ -24,7 +24,9 @@ from ..memory_type import MemoryRequestType
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
+_CONFIG_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "configs", "mqsim"
+)
 _DEFAULT_SSD_CONFIG = os.path.join(_CONFIG_DIR, "default_ssdconfig.xml")
 _DEFAULT_WORKLOAD_CONFIG = os.path.join(_CONFIG_DIR, "default_workload.xml")
 

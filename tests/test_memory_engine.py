@@ -215,7 +215,9 @@ class TestMemoryEngineWithMQSim(unittest.TestCase):
     """Integration tests: MemoryEngine with MQSim backend."""
 
     def setUp(self):
-        cfg_dir = os.path.join(os.path.dirname(__file__), "..", "configs")
+        cfg_dir = os.path.join(
+            os.path.dirname(__file__), "..", "configs", "mqsim"
+        )
         ssd_config = os.path.join(cfg_dir, "default_ssdconfig.xml")
         workload_config = os.path.join(cfg_dir, "default_workload.xml")
         self.engine = MemoryEngine(MemoryEngineConfig(

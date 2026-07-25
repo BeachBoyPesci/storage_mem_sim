@@ -3,8 +3,8 @@
     "media_config": {
         "media_type": "mqsim",
         "capacity": 512.0,
-        "ssd_config": "configs/default_ssdconfig.xml",
-        "workload_config": "configs/default_workload.xml",
+        "ssd_config": "configs/mqsim/default_ssdconfig.xml",
+        "workload_config": "configs/mqsim/default_workload.xml",
         "merge_contiguous": true,
         "request_size": 8192,
         "dp": 1,

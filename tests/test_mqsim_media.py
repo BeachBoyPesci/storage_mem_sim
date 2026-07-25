@@ -52,7 +52,7 @@ class TestTraceGeneration(unittest.TestCase):
     def setUpClass(cls):
         from ..media.mqsim_wrapper.pymqsim.trace import load_from_ssdconfig_xml
         cfg = os.path.join(
-            os.path.dirname(__file__), "..", "configs",
+            os.path.dirname(__file__), "..", "configs", "mqsim",
             "default_ssdconfig.xml",
         )
         load_from_ssdconfig_xml(cfg)
@@ -193,7 +193,9 @@ class TestConfigLoading(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        d = os.path.join(os.path.dirname(__file__), "..", "configs")
+        d = os.path.join(
+            os.path.dirname(__file__), "..", "configs", "mqsim"
+        )
         cls._ssd = os.path.join(d, "default_ssdconfig.xml")
 
     def setUp(self):
@@ -367,7 +369,7 @@ class TestNativeVsBinary(unittest.TestCase):
         self.sys = MQSimMediaSystem(_cfg(bandwidth=3.5))
         ssd = (self.sys.config.ssd_config_path
                or os.path.join(os.path.dirname(__file__), "..",
-                               "configs", "default_ssdconfig.xml"))
+                               "configs", "mqsim", "default_ssdconfig.xml"))
         self._ssd_cfg = os.path.abspath(ssd)
         self._trace_dir = os.path.join(
             os.path.dirname(__file__), "..", "media", "mqsim_wrapper", "trace")
