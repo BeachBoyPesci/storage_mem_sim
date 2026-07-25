@@ -210,7 +210,7 @@ Plane_No_Per_Die = 2       →    Plane_IDs   = 0..1
 
 ### 一、核心公式
 
-`pymqsim.trace` 用多个独立资源上界的最小值作为理论 IOPS：
+`pymqsim.performance_model` 用多个独立资源上界的最小值作为理论 IOPS：
 
 ```text
 TotalDies   = Channels × ChipsPerCH × DiesPerChip

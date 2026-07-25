@@ -19,12 +19,15 @@ from .trace import (
     addr_to_lba, size_to_sectors,
     # XML loaders
     load_from_ssdconfig_xml, load_from_workload_xml,
-    # Theory formulas
-    theory_iops, theory_bandwidth_mbps, theory_bus_utilization,
     # Trace config
     TraceSliceConfig,
     # Trace generation
     write_trace_file, build_trace_lines, merge_sequential,
+)
+from .performance_model import (
+    theory_iops,
+    theory_bandwidth_mbps,
+    theory_bus_utilization,
 )
 from .workload import generate_workload_xml, MQSimWorkload
 from .output import MQSimResult, parse_mqsim_output

@@ -59,7 +59,7 @@
     Overprovisioning   = 7%
     Wear Leveling      = Dynamic + Static (threshold 100)
 
-  ── 理论性能 (CWDP Pipeline Model, pymqsim.trace) ─────────────────────────
+  ── 理论性能 (CWDP Pipeline Model, pymqsim.performance_model) ──────────────
     公式: BusTime = CMD + Setup + DataOut
           DataOut = (ReqSize/2) × (2000/CH_BW_MBps) ns
           DiesPerCH = CHIPS_PER_CH × DIES_PER_CHIP

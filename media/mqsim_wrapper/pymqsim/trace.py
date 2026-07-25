@@ -1,4 +1,4 @@
-"""MQSim trace generation — geometry, CWDP addressing, theory, trace file I/O.
+"""MQSim trace generation — geometry, CWDP addressing, and trace file I/O.
 
 NAND geometry parameters (CHANNELS, PAGE_SIZE_BYTES, …) have **no defaults** —
 they must be loaded from an MQSim ssdconfig.xml via ``load_from_ssdconfig_xml()``
@@ -222,91 +222,6 @@ def load_from_workload_xml(xml_path: str) -> Dict[str, list]:
                 result[key] = []
 
     return result
-
-# =====================================================================
-# Theory formulas  (peak IOPS / bandwidth estimation without simulation)
-# =====================================================================
-
-def theory_iops(request_size_bytes: int) -> float:
-    """Theoretical max IOPS — min of independent resource bounds.
-
-    The tightest upper bound across:
-
-    1. Channel bus bandwidth (pure data-rate limit):
-          iops_bw = TOTAL_CHANNEL_BW_MBPS × 1e6 / S
-
-    2. NAND plane array (pure page-read parallelism limit):
-          iops_nand = TOTAL_PLANES × 1e9 / (pages_per_io × tR)
-
-    3. CWDP pipeline (channels operate in parallel; each channel
-       serializes commands to its own dies):
-          dies_per_ch = CHIPS_PER_CH × DIES_PER_CHIP
-          PipeCycle = max(tR, dies_per_ch × BusTime)
-          iops_cwdp = TOTAL_DIES × 1e9 / PipeCycle
-
-    4. Host PCIe bandwidth (if loaded from ssdconfig.xml):
-          iops_pcie = PCIE_LANE_BW_GBPS × 1e9 × PCIE_LANE_COUNT / S
-
-    5. Device queue depth (Little's Law, if loaded from ssdconfig.xml):
-          per_io_latency_ns = tR + BusTime  (minimum single-request latency)
-          iops_qd = IO_QUEUE_DEPTH × 1e9 / per_io_latency_ns
-
-    Bounds (4) and (5) are only applied when the corresponding XML tags
-    are present in the loaded ssdconfig.xml.
-    """
-    _require_loaded()
-    if request_size_bytes <= 0:
-        raise ValueError(
-            f"request_size_bytes must be > 0, got {request_size_bytes}"
-        )
-    pages_per_io = max(1, math.ceil(request_size_bytes / PAGE_SIZE_BYTES))
-
-    # Bound 1 — pure channel bus bandwidth
-    iops_bw = TOTAL_CHANNEL_BW_MBPS * 1e6 / request_size_bytes
-
-    # Bound 2 — pure NAND plane parallelism
-    iops_nand = TOTAL_PLANES / (pages_per_io * NAND_tR_NS * 1e-9)
-
-    # Bound 3 — CWDP pipeline (channels parallel, dies per ch serial on bus)
-    dies_per_ch = CHIPS_PER_CH * DIES_PER_CHIP
-    data_out_ns = (request_size_bytes / 2.0) * (2000.0 / CHANNEL_BW_MBPS)
-    bus_time_ns = CMD_TRANSFER_NS + DATA_SETUP_NS + data_out_ns
-    pipeline_cycle_ns = max(NAND_tR_NS, dies_per_ch * bus_time_ns)
-    iops_cwdp = TOTAL_DIES * 1e9 / pipeline_cycle_ns
-
-    # Bound 4 — host PCIe bandwidth
-    iops_pcie = PCIE_LANE_BW_GBPS * 1e9 * PCIE_LANE_COUNT / request_size_bytes
-
-    # Bound 5 — device queue depth (Little's Law with minimum latency)
-    iops_qd = IO_QUEUE_DEPTH * 1e9 / (NAND_tR_NS + bus_time_ns)
-
-    return min(iops_bw, iops_nand, iops_cwdp, iops_pcie, iops_qd)
-
-
-def theory_bandwidth_mbps(request_size_bytes: int) -> float:
-    """Theoretical peak bandwidth (MB/s), capped by total channel bandwidth."""
-    _require_loaded()
-    bw = theory_iops(request_size_bytes) * request_size_bytes / 1e6
-    return min(bw, float(TOTAL_CHANNEL_BW_MBPS))
-
-
-def theory_bus_utilization(request_size_bytes: int) -> float:
-    """Channel data-bus utilization in the CWDP pipeline.
-
-    U < 0.50 → IOPS-Bound      (bottleneck: NAND tR + CMD overhead)
-    U > 0.90 → Bandwidth-Bound  (bottleneck: channel bus bandwidth)
-    """
-    _require_loaded()
-    if request_size_bytes <= 0:
-        raise ValueError(
-            f"request_size_bytes must be > 0, got {request_size_bytes}"
-        )
-    dies_per_ch = CHIPS_PER_CH * DIES_PER_CHIP
-    data_out_ns = (request_size_bytes / 2.0) * (2000.0 / CHANNEL_BW_MBPS)
-    bus_time_ns = CMD_TRANSFER_NS + DATA_SETUP_NS + data_out_ns
-    pipeline_cycle_ns = max(NAND_tR_NS, dies_per_ch * bus_time_ns)
-    return dies_per_ch * data_out_ns / pipeline_cycle_ns
-
 
 # =====================================================================
 # Convenience aliases

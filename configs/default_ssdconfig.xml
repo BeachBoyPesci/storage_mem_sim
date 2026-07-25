@@ -3,7 +3,7 @@
   Default reference SSD config — conservative MLC small-scale config
   Suitable for quick CI testing and basic functional verification.
 
-  Peak specs (theory model — pymqsim.trace.theory_iops / theory_bandwidth_mbps):
+  Peak specs (theory model — pymqsim.performance_model):
     Total CH BW:       2,664 MB/s  (2.7 GB/s, 8ch × 333)
     IOPS @  4KB:         363,700   (bus util ~56% → mixed IOPS/BW bound)
     IOPS @128KB:          19,800   (bus util ~98% → strongly BW-bound)

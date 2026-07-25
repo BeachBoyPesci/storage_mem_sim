@@ -220,11 +220,16 @@ class TestConfigLoading(unittest.TestCase):
     def test_theory_functions(self):
         """theory_iops / theory_bw produce sensible results; U grows with size."""
         C = self.C
+        from ..media.mqsim_wrapper import pymqsim
+        from ..media.mqsim_wrapper.pymqsim import performance_model as model
+
         C.load_from_ssdconfig_xml(self._ssd)
-        u4k = C.theory_bus_utilization(4096)
-        u128k = C.theory_bus_utilization(131072)
-        self.assertGreater(C.theory_iops(4096), 0)
-        self.assertGreater(C.theory_bandwidth_mbps(131072), 0)
+        self.assertFalse(hasattr(C, "theory_iops"))
+        self.assertIs(pymqsim.theory_iops, model.theory_iops)
+        u4k = model.theory_bus_utilization(4096)
+        u128k = model.theory_bus_utilization(131072)
+        self.assertGreater(model.theory_iops(4096), 0)
+        self.assertGreater(model.theory_bandwidth_mbps(131072), 0)
         # Larger requests → higher bus utilisation
         self.assertGreater(u128k, u4k)
         # 128KB should be bandwidth-bound
@@ -251,11 +256,13 @@ class TestConfigLoading(unittest.TestCase):
             os.remove(invalid_path)
 
     def test_theory_rejects_non_positive_request_size(self):
+        from ..media.mqsim_wrapper.pymqsim import performance_model as model
+
         self.C.load_from_ssdconfig_xml(self._ssd)
         with self.assertRaises(ValueError):
-            self.C.theory_iops(0)
+            model.theory_iops(0)
         with self.assertRaises(ValueError):
-            self.C.theory_bus_utilization(-1)
+            model.theory_bus_utilization(-1)
 
 
 # ======================================================================
