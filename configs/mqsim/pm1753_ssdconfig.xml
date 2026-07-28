@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║              Samsung PM1753 — Enterprise NVMe SSD Config                 ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  ── 资料来源 ─────────────────────────────────────────────────────────────
+  · Samsung PM1753 (2024-2025 旗舰企业级 NVMe SSD)
+    Samsung V8 V-NAND (~236 layers) 3D TLC
+    参考: Samsung PM9A3 (V6, 128L) → PM1743 (V7, 176L) → PM1753 (V8, 236L)
+    对标: Kioxia CM7 / Solidigm D7-PS1030 / Memblaze PBlaze7
+  · Samsung 官方规格:
+    - 容量: 1.92 ~ 30.72 TB (E3.S / U.2 / E1.L 多种形态)
+    - 接口: PCIe Gen5 ×4 (NVMe 2.0)
+    - 顺序读: ~14 GB/s, 顺序写: ~10 GB/s
+    - 随机读: ~2.5M IOPS (4KB), 随机写: ~600K IOPS (4KB)
+    - 功耗: ~25W (active), ~8W (idle)
+  · Samsung V-NAND TLC 技术特征 (Flash Memory Summit / ISSCC 论文):
+    - 4-plane per die (相比 YMTC 232L 的 6-plane, Samsung 取更保守的 plane 数)
+    - tR ≈ 40 µs (uniform LSB/CSB/MSB, V8 代际改进)
+    - tProg ≈ 350 µs (V8 比 V6 390µs 快 ~10%)
+
+  ── NAND 几何 ─────────────────────────────────────────────────────────────
+    CHANNELS          = 16        flash 通道数 (旗舰控制器)
+    CHIPS_PER_CH      =  4        每通道 NAND 封装数 (Chip / Way)
+    DIES_PER_CHIP     =  2        每封装晶粒数
+    PLANES_PER_DIE    =  4        每晶粒平面数 (Samsung V8 V-NAND: 4-plane)
+    ─────────────────────────────────────────
+    TOTAL_DIES        = 16×4×2 = 128
+    TOTAL_PLANES      = 128×4  = 512
+
+  ── Page / Block / Plane 层级 ─────────────────────────────────────────────
+    PAGE_SIZE_BYTES   = 16,384 B (16 KB) + 2,208 B metadata
+    PAGES_PER_BLOCK   = 768 (Samsung TLC V-NAND: 256 wordlines × 3 bits/cell)
+    BLOCKS_PER_PLANE  = 5,376 (全规格, 非仿真缩减)
+    ─────────────────────────────────────────
+    每 Block 容量       = 768 × 16 KB ≈ 12.3 MB
+    每 Plane 容量       = 5,376 × 12.3 MB ≈ 63.0 GB
+    每 Die 容量         = 4 × 63.0 GB ≈ 252 GB
+    Raw NAND 总容量     = 512 × 63.0 GB ≈ 31.5 TB
+    User 容量 (OP=7%)   ≈ 31.5 / 1.07 ≈ 29.4 TB
+    注: 这是接近 PM1753 顶级 SKU (~30.72 TB) 的全规格配置,
+         不同于 Ascend A3 16CH 的仿真缩减版
+
+  ── 与 Ascend A3 16CH 的关键差异 ─────────────────────────────────────────
+                     Ascend A3 16CH          PM1753
+    ─────────────────────────────────────────────────────────
+    NAND Flash       YMTC 232L (6-plane)     Samsung V8 (4-plane)
+    Total Planes     768                     512
+    Channel BW       1,000 MB/s              1,000 MB/s (MQSim timing limit)
+    Total CH BW      16.0 GB/s               16.0 GB/s
+    tR (read)        37 / 45 / 37 µs         40 µs (uniform)
+    tProg (write)    390 µs                  350 µs (10% faster)
+    P/E Cycles       3,000                   5,000 (66% higher endurance)
+    DRAM Cache       2 GB                    4 GB
+    Raw NAND         3.6 TB                  31.5 TB (~8.8× larger)
+    ─────────────────────────────────────────────────────────
+    定位              国产替代, 仿真缩减配置    旗舰性能, 接近物理全规格
+
+  ── 时序参数 ───────────────────────────────────────────────────────────────
+    NAND 读 (tR)       = 40,000 ns (uniform LSB/CSB/MSB)
+                         Samsung V8 V-NAND 代际改进, 比 V6 45µs 快 ~11%
+    NAND 写 (tProg)    = 350,000 ns (Samsung V8 TLC)
+    NAND 擦除 (tErase) = 3,500,000 ns (3D TLC 典型值)
+    Channel BW         = 1,000 MB/s/ch (MQSim integer-ns timing limit)
+    Total Channel BW   = 16 × 1,000 = 16,000 MB/s = 16.0 GB/s
+    Flash 协议          = NVDDR2 (ONFI 3.x: CMD=290ns, Setup=30ns)
+                         注: MQSim 不支持 NVDDR3, Samsung V8 实际支持
+                         Toggle 5.0 (2400 MT/s), 此处用 NVDDR2 保守近似
+    P/E Cycles         = 5,000 (Samsung 企业级 V-NAND)
+
+  ── Host 接口 ──────────────────────────────────────────────────────────────
+    PCIe Gen5 ×4       ≈ 16 GB/s (4 lanes × 4 GB/s/lane)
+    NVMe Queue Depth   = 65,535
+    DRAM Cache         = 4 GB (ADVANCED, SHARED) — PM1753 premium-tier
+    CMT (Cache Mapping Table) = 32M entries (与 31.5TB 容量成比例)
+
+  ── FTL / GC 配置 ──────────────────────────────────────────────────────────
+    Address Mapping    = PAGE_LEVEL
+    Plane Allocation   = CWDP (Channel → Way/Chip → Die → Plane)
+    GC Policy          = RGA (Greedy), threshold 5%, hard threshold 0.5%
+    Overprovisioning   = 7%
+    Wear Leveling      = Dynamic + Static (threshold 100)
+
+  ── 理论性能 (CWDP Pipeline Model, pymqsim.performance_model) ──────────────
+    公式: BusTime = CMD + Setup + DataOut
+          DataOut = (ReqSize/2) × (2000/CH_BW_MBps) ns
+          DiesPerCH = CHIPS_PER_CH × DIES_PER_CHIP
+          PipeCycle = max(tR, DiesPerCH × BusTime)
+          IOPS = TOTAL_DIES × 1e9 / PipeCycle
+          BW   = IOPS × ReqSize / 1e6 (MB/s)
+          BusUtil = DiesPerCH×DataOut / PipeCycle
+
+    ReqSize   IOPS           BW               BusUtil   判定
+    ─────────────────────────────────────────────────────────────
+      4 KB    3,200,000     13,107 MB/s (13.1 GB/s)   81.9%   过渡区
+      8 KB    1,879,699     15,398 MB/s (15.4 GB/s)   96.2%   BW-Bound
+     16 KB      957,854     15,693 MB/s (15.7 GB/s)   98.1%   BW-Bound
+     32 KB      483,559     15,845 MB/s (15.8 GB/s)   99.0%   BW-Bound
+    128 KB      121,773     15,961 MB/s (16.0 GB/s)   99.8%   BW-Bound
+    ─────────────────────────────────────────────────────────────
+    峰值 BW ≈ 16.0 GB/s (受单通道速率与 PCIe Gen5 ×4 上限共同约束)
+
+    解读: 4KB 仍受到 tR 影响；8KB 及以上主要为 BW-Bound。
+          A3 与 PM1753 在这个 MQSim 可表达的传输率下具有相同通道上限，
+          小请求差异主要来自 tR 与 plane 几何。
+
+-->
+<Execution_Parameter_Set>
+    <Host_Parameter_Set>
+        <!-- PCIe Gen5 ×4: ~4 GB/s/lane → ~16 GB/s total (Samsung PM1753 class) -->
+        <PCIe_Lane_Bandwidth>4.00000</PCIe_Lane_Bandwidth>
+        <PCIe_Lane_Count>4</PCIe_Lane_Count>
+        <SATA_Processing_Delay>400000</SATA_Processing_Delay>
+        <Enable_ResponseTime_Logging>false</Enable_ResponseTime_Logging>
+        <ResponseTime_Logging_Period_Length>1000000</ResponseTime_Logging_Period_Length>
+    </Host_Parameter_Set>
+    <Device_Parameter_Set>
+        <Seed>321</Seed>
+        <Enabled_Preconditioning>false</Enabled_Preconditioning>
+        <Memory_Type>FLASH</Memory_Type>
+        <HostInterface_Type>NVME</HostInterface_Type>
+        <IO_Queue_Depth>65535</IO_Queue_Depth>
+        <Queue_Fetch_Size>512</Queue_Fetch_Size>
+        <Caching_Mechanism>ADVANCED</Caching_Mechanism>
+        <Data_Cache_Sharing_Mode>SHARED</Data_Cache_Sharing_Mode>
+        <!-- DRAM write cache: 4 GB (Samsung PM1753 premium-tier cache) -->
+        <Data_Cache_Capacity>4294967296</Data_Cache_Capacity>
+        <Data_Cache_DRAM_Row_Size>8192</Data_Cache_DRAM_Row_Size>
+        <Data_Cache_DRAM_Data_Rate>100</Data_Cache_DRAM_Data_Rate>
+        <Data_Cache_DRAM_Data_Busrt_Size>1</Data_Cache_DRAM_Data_Busrt_Size>
+        <Data_Cache_DRAM_tRCD>13</Data_Cache_DRAM_tRCD>
+        <Data_Cache_DRAM_tCL>13</Data_Cache_DRAM_tCL>
+        <Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
+        <Address_Mapping>PAGE_LEVEL</Address_Mapping>
+        <Ideal_Mapping_Table>false</Ideal_Mapping_Table>
+        <!-- CMT: 32M entries (proportional to capacity) -->
+        <CMT_Capacity>33554432</CMT_Capacity>
+        <CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
+        <Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
+        <Transaction_Scheduling_Policy>PRIORITY_OUT_OF_ORDER</Transaction_Scheduling_Policy>
+        <Overprovisioning_Ratio>0.07</Overprovisioning_Ratio>
+        <GC_Exec_Threshold>0.05000</GC_Exec_Threshold>
+        <GC_Block_Selection_Policy>RGA</GC_Block_Selection_Policy>
+        <Use_Copyback_for_GC>false</Use_Copyback_for_GC>
+        <Preemptible_GC_Enabled>false</Preemptible_GC_Enabled>
+        <GC_Hard_Threshold>0.005000</GC_Hard_Threshold>
+        <Dynamic_Wearleveling_Enabled>true</Dynamic_Wearleveling_Enabled>
+        <Static_Wearleveling_Enabled>true</Static_Wearleveling_Enabled>
+        <Static_Wearleveling_Threshold>100</Static_Wearleveling_Threshold>
+        <Preferred_suspend_erase_time_for_read>700000</Preferred_suspend_erase_time_for_read>
+        <Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
+        <Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- NAND Flash: 16CH flagship (Samsung V8 V-NAND)               -->
+        <!-- Total: 16 CH × 4 chip × 2 die × 4 plane = 512 planes        -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <Flash_Channel_Count>16</Flash_Channel_Count>
+        <Flash_Channel_Width>1</Flash_Channel_Width>
+        <!-- MQSim uses integer-ns channel periods; values above 1000 collapse to 0ns. -->
+        <Channel_Transfer_Rate>1000</Channel_Transfer_Rate>
+        <Chip_No_Per_Channel>4</Chip_No_Per_Channel>
+        <!-- NVDDR2: CMD=290ns, Setup=30ns (MQSim does not support NVDDR3) -->
+        <Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
+        <Flash_Parameter_Set>
+            <!-- Samsung V8 V-NAND 3D TLC (~236 layers) -->
+            <Flash_Technology>TLC</Flash_Technology>
+            <CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
+            <!-- Samsung V8 V-NAND: uniform 40µs read (generational improvement over V6 45µs) -->
+            <Page_Read_Latency_LSB>40000</Page_Read_Latency_LSB>
+            <Page_Read_Latency_CSB>40000</Page_Read_Latency_CSB>
+            <Page_Read_Latency_MSB>40000</Page_Read_Latency_MSB>
+            <!-- Samsung V8 TLC program: ~350µs (faster than V6 390µs) -->
+            <Page_Program_Latency_LSB>350000</Page_Program_Latency_LSB>
+            <Page_Program_Latency_CSB>350000</Page_Program_Latency_CSB>
+            <Page_Program_Latency_MSB>350000</Page_Program_Latency_MSB>
+            <!-- Block erase latency (typical 3D TLC: 3.5 ms) -->
+            <Block_Erase_Latency>3500000</Block_Erase_Latency>
+            <!-- Samsung V8 TLC: 5000 PE cycles -->
+            <Block_PE_Cycles_Limit>5000</Block_PE_Cycles_Limit>
+            <Suspend_Erase_Time>700000</Suspend_Erase_Time>
+            <Suspend_Program_Time>100000</Suspend_Program_Time>
+            <!-- Samsung V8 V-NAND geometry -->
+            <Die_No_Per_Chip>2</Die_No_Per_Chip>
+            <Plane_No_Per_Die>4</Plane_No_Per_Die>
+            <Block_No_Per_Plane>5376</Block_No_Per_Plane>
+            <Page_No_Per_Block>768</Page_No_Per_Block>
+            <Page_Capacity>16384</Page_Capacity>
+            <Page_Metadat_Capacity>2208</Page_Metadat_Capacity>
+        </Flash_Parameter_Set>
+    </Device_Parameter_Set>
+</Execution_Parameter_Set>

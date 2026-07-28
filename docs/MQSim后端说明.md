@@ -13,6 +13,13 @@ MemoryEngine.issue_request()
     └─ 4. 返回 MediaMetrics         → time, bandwidth, IOPS
 ```
 
+其中 `IOPS`、`IOPS_Read` 和 `IOPS_Write` 直接来自 MQSim 的
+`Host.IO_Flow` 输出，表示 trace 请求经过 NVMe queue、PCIe 和 SSD 内部路径后
+得到的端到端 device IOPS。它们不是 MemoryEngine logical request rate，也不是
+NAND 内部 page read/program transaction rate。仿真结束时 wrapper 会校验
+MQSim 的 generated request 数与 serviced request 数一致，避免把未完成请求
+计入 IOPS。
+
 ### MQSim trace 格式
 
 每行一条请求：`<arrival_ns> <device_id> <lba> <sectors> <req_type>`
@@ -20,10 +27,13 @@ MemoryEngine.issue_request()
 | 字段 | 说明 |
 |---|---|
 | `arrival_ns` | 到达时间（固定为 0，MemoryEngine 无时序） |
-| `device_id` | 设备号（0..15 循环，适配 MQSim 多队列） |
-| `lba` | 逻辑块地址 = `addr / 512`（地址已页对齐到 `PAGE_SIZE_BYTES` 边界，LBA 始终为 `SECTORS_PER_PAGE` 的倍数） |
+| `device_id` | 按 trace 行号轮转的设备/流标识：`line_index % CHANNELS`；它不是物理 NAND channel 映射 |
+| `lba` | 逻辑块地址 = `addr / 512`（地址已 sector 对齐到 512B 边界，保留页内扇区偏移） |
 | `sectors` | 扇区数 = `ceil(size / 512)` |
 | `req_type` | 1 = 读, 0 = 写 |
+
+> NAND 的 channel/chip/die/plane 分配由 MQSim 的 FTL 和
+> `Plane_Allocation_Scheme` 决定，trace 生成器不自行重写 LBA 来模拟 CWDP。
 
 ### 请求合并
 
@@ -35,10 +45,13 @@ MemoryEngine.issue_request()
 
 ### 控制参数 (`mqsim.json`)
 
-| 参数 | 带宽测试 | IOPS 测试 |
-|------|---------|----------|
-| `merge_contiguous` | `true` | `false` |
-| `request_size` | 131072 (128 KB) | 4096 (4 KB) |
+| 参数 | 带宽测试 | IOPS 测试 | 说明 |
+|------|---------|----------|------|
+| `merge_contiguous` | `true` | `false` | 是否合并连续同类请求 |
+| `request_size` | 131072 (128 KB) | 4096 (4 KB) | 每条 trace line 最大字节数 |
+
+> `merge_contiguous` 和 `request_size` 通过 `MediaConfig` →
+> `MQSimMediaSystem._init_mqsim()` → `TraceSliceConfig` 自动传递。
 
 ### MQSim 配置文件
 
@@ -58,13 +71,14 @@ MemoryEngine.issue_request()
 
 ```python
 from pymqsim import (
-    TraceSliceConfig, write_trace_file,
+    TraceSliceConfig, write_trace_file, load_from_ssdconfig_xml,
     generate_workload_xml, run_simulation,
     # 理论公式（无需运行仿真即可预估性能）
     theory_iops, theory_bandwidth_mbps, theory_bus_utilization,
 )
 
-# 1. 生成 trace 文件
+# 1. 加载几何并生成 trace 文件
+load_from_ssdconfig_xml("ssdconfig.xml")
 cfg = TraceSliceConfig(merge_contiguous=True, request_size=131072)
 total_bytes, lines = write_trace_file(mem_req_list, "trace.txt", cfg)
 
@@ -77,7 +91,6 @@ result = run_simulation(
     workload_xml_path="workload.xml",
 )
 
-print(f"Latency:  {result.avg_latency_ns:.1f} ns")
 print(f"Bandwidth: {result.bandwidth_bytes_per_sec / 1e9:.2f} GB/s")
 print(f"IOPS:     {result.total_iops:.0f}")
 
@@ -92,26 +105,31 @@ for size in [4096, 8192, 32768, 65536, 131072]:
 输出示例：
 
 ```
-4KB   → IOPS=363,714  BW=1,490 MB/s  U=55.9%   (IOPS-Bound)
-8KB   → IOPS=233,266  BW=1,911 MB/s  U=71.7%   (过渡区)
-32KB  → IOPS=74,007   BW=2,425 MB/s  U=91.0%   (带宽-Bound)
-64KB  → IOPS=38,741   BW=2,539 MB/s  U=95.3%   (强带宽-Bound)
-128KB → IOPS=19,836   BW=2,600 MB/s  U=97.6%   (强带宽-Bound)
+4KB   → IOPS=633,899  BW=2,596 MB/s  U=97.5%   (带宽-Bound)
+8KB   → IOPS=321,020  BW=2,630 MB/s  U=98.7%   (带宽-Bound)
+32KB  → IOPS=81,035   BW=2,655 MB/s  U=99.7%   (强带宽-Bound)
+64KB  → IOPS=40,583   BW=2,660 MB/s  U=99.8%   (强带宽-Bound)
+128KB → IOPS=20,308   BW=2,662 MB/s  U=99.9%   (强带宽-Bound)
 ```
 
 ### 项目结构
 
 ```
+configs/mqsim/
+├── default_ssdconfig.xml      # 默认 SSD 设备配置（NAND 几何参数来源）
+├── default_workload.xml       # 默认 workload 模板
+├── ascend_a3_16ch_*.xml       # A3/ES3600P V7 3.2TB 校准代理模型
+└── pm1753_*.xml               # PM1753 代理模型与 workload 配置
+
 media/mqsim_wrapper/
 ├── pymqsim/                   # Python 库
 │   ├── __init__.py            # 公开 API（27 个符号）
-│   ├── trace.py               # 几何常量 + CWDP + 理论公式 + trace 生成
+│   ├── trace.py               # 几何常量 + CWDP + trace 生成
+│   ├── performance_model.py   # 理论 IOPS、带宽和总线利用率
 │   ├── workload.py            # generate_workload_xml — workload XML 生成
 │   ├── simulator.py           # run_simulation — 仿真运行器（native + subprocess）
 │   └── output.py              # MQSimResult — 输出 XML 解析
 ├── MQSim/                     # MQSim C++ 子模块
-├── default_ssdconfig.xml      # 默认 SSD 设备配置（NAND 几何参数来源）
-├── default_workload.xml       # 默认 workload 模板
 ├── mqsim_pybind.cpp           # pybind11 C++ 桥接
 ├── CMakeLists.txt             # C++ 构建脚本
 ├── setup.py                   # pip install 入口

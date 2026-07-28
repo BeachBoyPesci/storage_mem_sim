@@ -24,12 +24,11 @@ from ..memory_type import MemoryRequestType
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SSD_CONFIG = os.path.join(
-    os.path.dirname(__file__), "mqsim_wrapper", "default_ssdconfig.xml"
+_CONFIG_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "configs", "mqsim"
 )
-_DEFAULT_WORKLOAD_CONFIG = os.path.join(
-    os.path.dirname(__file__), "mqsim_wrapper", "default_workload.xml"
-)
+_DEFAULT_SSD_CONFIG = os.path.join(_CONFIG_DIR, "default_ssdconfig.xml")
+_DEFAULT_WORKLOAD_CONFIG = os.path.join(_CONFIG_DIR, "default_workload.xml")
 
 
 class MQSimMediaSystem(BaseMediaSystem):
@@ -49,15 +48,29 @@ class MQSimMediaSystem(BaseMediaSystem):
     # ------------------------------------------------------------------
 
     def _init_mqsim(self):
-        # resolve config paths (always, even without _mqsim)
-        ssd = self.config.ssd_config_path or _DEFAULT_SSD_CONFIG
-        self._ssd_config_path = (
-            os.path.abspath(ssd) if os.path.isfile(ssd)
-            else _DEFAULT_SSD_CONFIG
-        )
-        wl = self.config.workload_config_path or _DEFAULT_WORKLOAD_CONFIG
-        self._workload_config_path = (
-            os.path.abspath(wl) if os.path.isfile(wl) else ""
+        # Explicit paths are part of the experiment definition.  Silently
+        # replacing a typo with a default would produce valid-looking results
+        # for the wrong device.
+        ssd = self.config.ssd_config_path
+        if ssd:
+            if not os.path.isfile(ssd):
+                raise FileNotFoundError(f"SSD config not found: {ssd}")
+        else:
+            ssd = _DEFAULT_SSD_CONFIG
+        self._ssd_config_path = os.path.abspath(ssd)
+
+        wl = self.config.workload_config_path
+        if wl:
+            if not os.path.isfile(wl):
+                raise FileNotFoundError(f"Workload config not found: {wl}")
+        else:
+            wl = _DEFAULT_WORKLOAD_CONFIG
+        self._workload_config_path = os.path.abspath(wl)
+
+        # ---- auto-configure trace slicing from MediaConfig ----
+        self._trace_config = TraceSliceConfig(
+            merge_contiguous=self.config.merge_contiguous,
+            request_size=self.config.request_size_bytes,
         )
 
         # ---- load NAND geometry from SSD config XML ----
@@ -69,10 +82,9 @@ class MQSimMediaSystem(BaseMediaSystem):
             logger.info("Loaded NAND geometry from %s: %s",
                         self._ssd_config_path,
                         ", ".join(f"{k}={v}" for k, v in loaded.items()))
-            if self._workload_config_path and os.path.isfile(self._workload_config_path):
-                res = load_from_workload_xml(self._workload_config_path)
-                logger.debug("Workload resource IDs: %s",
-                             {k: v for k, v in res.items() if v})
+            res = load_from_workload_xml(self._workload_config_path)
+            logger.debug("Workload resource IDs: %s",
+                         {k: v for k, v in res.items() if v})
 
         # check native pybind11 availability
         try:
@@ -119,14 +131,15 @@ class MQSimMediaSystem(BaseMediaSystem):
             self.system_metrics.update_from_media(m)
             return m
 
-        # output directory
-        trace_dir = os.path.join(
+        # output directory — unique sub-dir per run to isolate concurrent calls
+        trace_root = os.path.join(
             os.path.dirname(__file__), "mqsim_wrapper", "trace")
+        rid = uuid.uuid4().hex[:12]
+        trace_dir = os.path.join(trace_root, rid)
         os.makedirs(trace_dir, exist_ok=True)
 
-        rid = uuid.uuid4().hex[:12]
-        trace_path = os.path.join(trace_dir, f"mqsim_trace_{rid}.txt")
-        workload_path = os.path.join(trace_dir, f"mqsim_workload_{rid}.xml")
+        trace_path = os.path.join(trace_dir, "trace.txt")
+        workload_path = os.path.join(trace_dir, "workload.xml")
 
         # 1. write trace
         total_bytes, trace_lines = write_trace_file(
@@ -154,20 +167,20 @@ class MQSimMediaSystem(BaseMediaSystem):
         self._last_result = result
 
         total_time = 0.0
-        if result.total_time_ns > 0:
-            total_time = result.total_time_ns / 1e9
+        if result.total_time_s > 0:
+            total_time = result.total_time_s
         elif result.bandwidth_bytes_per_sec > 0:
             total_time = total_bytes / result.bandwidth_bytes_per_sec
 
-        logger.info("MQSim: %.1f ns avg latency, %.2f GB/s, %.0f IOPS",
-                    result.avg_latency_ns,
-                    result.bandwidth_bytes_per_sec / 1e9,
+        logger.info("MQSim: %.1f s total_time, %.2f GB/s, %.0f IOPS",
+                    total_time,
+                    result.bandwidth_bytes_per_sec / (1024**3),
                     result.total_iops)
 
         metrics = MediaMetrics(
             num_read_requests=num_read,
             num_write_requests=num_write,
-            num_media_reqs=len(mem_req_list),
+            num_media_reqs=trace_lines,
             time=total_time,
             bandwidth=result.bandwidth_bytes_per_sec,
             iops=result.total_iops,

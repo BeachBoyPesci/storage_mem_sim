@@ -138,6 +138,9 @@ class TestRamulatorMediaSystemFull(unittest.TestCase):
         self.assertEqual(metrics.num_media_reqs, 1)
         self.assertEqual(metrics.num_read_requests, 1)
         self.assertGreater(metrics.cycles, 0)
+        self.assertIsNone(metrics.iops)
+        self.assertIsNone(metrics.iops_read)
+        self.assertIsNone(metrics.iops_write)
 
     def test_handler_mem_request_multiple(self):
         g = self.system._tx_bytes

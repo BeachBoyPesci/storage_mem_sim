@@ -39,6 +39,7 @@ class MediaConfig:
     ssd_config_path: str = ""
     workload_config_path: str = ""
     request_size_bytes: int = 131072
+    merge_contiguous: bool = True
 
     @property
     def scale_factor(self) -> float:

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 class MQSimResult:
     """Structured output from a single MQSim simulation run.
 
-    All latency values are in nanoseconds.  Bandwidth in bytes/second.
+    All latency values are in us.  Bandwidth in bytes/second.
     IOPS in operations/second.
     """
 
@@ -32,11 +32,11 @@ class MQSimResult:
     iops_write: float = 0.0
 
     # latency  (from MQSim's Device_Response_Time / End_to_End_Request_Delay)
-    device_response_time_ns: float = 0.0
-    end_to_end_delay_ns: float = 0.0
+    device_response_time_us: float = 0.0
+    end_to_end_delay_us: float = 0.0
 
     # derived
-    total_time_ns: float = 0.0
+    total_time_s: float = 0.0
 
     # ---- derived properties ----
 
@@ -53,8 +53,8 @@ class MQSimResult:
         return self.iops_read + self.iops_write
 
     @property
-    def avg_latency_ns(self) -> float:
-        return self.device_response_time_ns
+    def avg_latency_us(self) -> float:
+        return self.device_response_time_us
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +69,8 @@ _TAG_MAP = {
     "Bandwidth":                ("bandwidth_bytes_per_sec", float),
     "IOPS_Read":                ("iops_read",            float),
     "IOPS_Write":               ("iops_write",           float),
-    "Device_Response_Time":     ("device_response_time_ns", float),
-    "End_to_End_Request_Delay": ("end_to_end_delay_ns",   float),
+    "Device_Response_Time":     ("device_response_time_us", float),
+    "End_to_End_Request_Delay": ("end_to_end_delay_us",   float),
 }
 
 
@@ -111,12 +111,12 @@ def parse_mqsim_output(xml_path: str) -> MQSimResult:
             continue
         setattr(result, field, val)
 
-    # compute total_time_ns from bytes / bandwidth
+    # compute total_time_s from bytes / bandwidth
     if result.bandwidth_bytes_per_sec > 0:
         total = result.total_bytes
         if total > 0:
-            result.total_time_ns = (
+            result.total_time_s = (
                 total / result.bandwidth_bytes_per_sec
-            ) * 1e9
+            )
 
     return result

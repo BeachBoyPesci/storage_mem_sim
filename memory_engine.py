@@ -234,16 +234,11 @@ class MemoryEngine:
             global_memory_reqs_num=len(mem_reqs),
             bandwidth=total_media_metrics.bandwidth,
             iops=total_media_metrics.iops,
+            iops_read=total_media_metrics.iops_read,
+            iops_write=total_media_metrics.iops_write,
         )
 
         self.engine_metrics.update(mem_metrics, simulated_bytes)
-
-        logger.debug(
-            "issue_request done: cycles=%d time=%.2fns sim_reqs=%d "
-            "global_reqs=%d bw=%.1fMB/s",
-            mem_metrics.cycles, mem_metrics.total_time * 1e9,
-            mem_metrics.memory_reqs_num, mem_metrics.global_memory_reqs_num,
-            self.engine_metrics.avg_bandwidth / 1e6 if self.engine_metrics.avg_bandwidth else 0)
 
         return mem_metrics
 

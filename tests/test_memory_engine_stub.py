@@ -32,6 +32,7 @@ class FakeMediaSystem(BaseMediaSystem):
         super().__init__(MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC, bandwidth=100.0))
         self.calls: list[list[MemoryRequest]] = []
+        self.device_iops = None
 
     def handler_mem_request(self, mem_req_list):
         self.calls.append(mem_req_list)
@@ -39,6 +40,7 @@ class FakeMediaSystem(BaseMediaSystem):
             cycles=len(mem_req_list) * 10,  # fake: 10 cycles per request
             time=len(mem_req_list) * 1e-9,
             num_media_reqs=len(mem_req_list),
+            iops=self.device_iops,
         )
 
 
@@ -110,8 +112,8 @@ class TestMultiInstanceDistribution(unittest.TestCase):
         self.assertEqual(metrics.global_memory_reqs_num, 0)
         self.assertEqual(len(fake.calls), 0)
 
-    def test_avg_bandwidth_uses_simulated_bytes(self):
-        """avg_bandwidth = simulated_bytes / simulated_time."""
+    def test_bandwidth_uses_simulated_bytes(self):
+        """bandwidth = simulated_bytes / simulated_time."""
         engine, fake = self._make_engine(dp_size=2, instance_num=2)
 
         # 2 user reqs × size=100 × dp=2 = 4 engine reqs, round-robin:
@@ -122,7 +124,7 @@ class TestMultiInstanceDistribution(unittest.TestCase):
         )
         em = engine.get_engine_metrics()
         expected_bw = 200.0 / 2e-9
-        self.assertAlmostEqual(em.avg_bandwidth, expected_bw, places=0)
+        self.assertAlmostEqual(em.bandwidth, expected_bw, places=0)
 
     def test_memory_reqs_num_simulated_instance(self):
         """memory_reqs_num = requests in simulated instance."""
@@ -149,6 +151,19 @@ class TestMultiInstanceDistribution(unittest.TestCase):
         self.assertEqual(metrics.global_memory_reqs_num, 1)
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(len(fake.calls[0]), 1)
+
+    def test_device_iops_is_passed_through_without_logical_recomputation(self):
+        """MemoryEngine preserves the device rate returned by its backend."""
+        engine, fake = self._make_engine(dp_size=2, instance_num=2)
+        fake.device_iops = 12345.0
+
+        metrics = engine.issue_request(
+            [0, 64], [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+
+        self.assertEqual(metrics.iops, 12345.0)
+        self.assertEqual(engine.get_engine_metrics().iops, 12345.0)
 
 
 if __name__ == "__main__":

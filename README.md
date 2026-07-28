@@ -1,6 +1,6 @@
 # MemEngine
 
-MemEngine 是一个面向 LLM 推理服务场景的内存/存储介质仿真框架。它位于上层服务/模型逻辑和底层介质仿真器之间，将 tensor、KV cache 等高层访问转换成后端可执行的请求，并返回 timing、bandwidth、IOPS 等性能指标。
+MemEngine 是一个面向 LLM 推理服务场景的内存/存储介质仿真框架。它位于上层服务/模型逻辑和底层介质仿真器之间，将 tensor、KV cache 等高层访问转换成后端可执行的请求，并返回 timing、bandwidth，以及 MQSim 端到端 device IOPS 等性能指标。
 
 更详细的设计说明见 [docs/design.md](docs/design.md)。
 

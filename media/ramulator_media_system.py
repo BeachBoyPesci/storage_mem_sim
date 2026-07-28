@@ -183,6 +183,8 @@ class RamulatorMediaSystem(BaseMediaSystem):
         num_write = len(media_reqs) - num_read
 
         cycles = self._run_sim(media_reqs) if media_reqs else 0
+        total_time = cycles * self._tick_ps * 1e-12
+        transferred_bytes = len(media_reqs) * self._tx_bytes
 
         metrics = MediaMetrics(
             num_read_requests=num_read,
@@ -190,7 +192,10 @@ class RamulatorMediaSystem(BaseMediaSystem):
             num_other_requests=0,
             cycles=cycles,
             num_media_reqs=len(media_reqs),
-            time=cycles * self._tick_ps * 1e-12,
+            time=total_time,
+            bandwidth=(
+                transferred_bytes / total_time if total_time > 0 else 0.0
+            ),
         )
         self.system_metrics.update_from_media(metrics)
         return metrics

@@ -92,7 +92,7 @@
 |---|---|---|
 | `Flash_Channel_Count` | 8 | NAND 闪存通道数。→ `CHANNELS` |
 | `Flash_Channel_Width` | 1 | 通道宽度（总线位宽因子） |
-| `Channel_Transfer_Rate` | 333 | 单通道数据传输速率 (MT/s)。→ `CHANNEL_BW_MBPS` |
+| `Channel_Transfer_Rate` | 333 | 单通道数据传输速率 (MB/s)。MQSim 的整数 ns 周期要求该值不超过 1000。→ `CHANNEL_BW_MBPS` |
 | `Chip_No_Per_Channel` | 4 | 每通道芯片数。→ `CHIPS_PER_CH` |
 | `Flash_Comm_Protocol` | NVDDR2 | 闪存通信协议。`NVDDR2` / `NVDDR3`，决定 CMD/DATA 时序 |
 
@@ -194,3 +194,46 @@ Plane_No_Per_Die = 2       →    Plane_IDs   = 0..1
 ```
 
 可以指定子集（如只用 4 个通道），但范围不能超出硬件定义。
+
+
+设备id：
+| 参数                        | 值          | 对多流的影响                                       |
+| ------------------------- | ---------- | -------------------------------------------- |
+| `IO_Queue_Depth`          | **65535**  | 每个 device\_id 对应的 SQ 最大深度（NVMe 上限）           |
+| `Queue_Fetch_Size`        | **512**    | 每个 SQ 每次最多取 512 个请求进入设备级队列                   |
+| `Data_Cache_Sharing_Mode` | **SHARED** | 所有 device\_id 的流**共享** 256MB Data Cache，互相竞争 |
+| `CMT_Sharing_Mode`        | **SHARED** | 所有 device\_id 的流**共享** 2MB 映射缓存，互相竞争         |
+| `PCIe_Lane_Count`         | **4**      | 前端带宽 = 4 GB/s（1GB/s × 4 lanes），是所有流共享的总线     |
+增加 device_id 个数的核心好处是提升并发度、更充分利用 SSD 后端并行资源，从而更接近真实 NVMe 多队列场景下的性能上限。具体可以从以下几个维度理解：
+
+## 三、如何根据配置参数计算理论iops和理论带宽
+
+### 一、核心公式
+
+`pymqsim.performance_model` 用多个独立资源上界的最小值作为理论 IOPS：
+
+```text
+TotalDies   = Channels × ChipsPerCH × DiesPerChip
+TotalPlanes = TotalDies × PlanesPerDie
+DiesPerCH   = ChipsPerCH × DiesPerChip
+PagesPerIO  = ceil(RequestSize / PageSize)
+
+DataOut     = RequestSize × 1000 / ChannelRateMBps
+BusTime     = CmdTransfer + DataSetup + DataOut
+PipeCycle   = max(tR, DiesPerCH × BusTime)
+
+IOPS_channel = Channels × ChannelRateMBps × 1e6 / RequestSize
+IOPS_nand    = TotalPlanes × 1e9 / (PagesPerIO × tR)
+IOPS_cwdp    = TotalDies × 1e9 / PipeCycle
+IOPS_pcie    = PCIeLaneGBps × LaneCount × 1e9 / RequestSize
+IOPS_qd      = QueueDepth × 1e9 / (tR + BusTime)
+
+TheoryIOPS = min(IOPS_channel, IOPS_nand, IOPS_cwdp, IOPS_pcie, IOPS_qd)
+TheoryBW   = min(TheoryIOPS × RequestSize / 1e6,
+                 Channels × ChannelRateMBps)
+BusUtil    = DiesPerCH × DataOut / PipeCycle
+```
+
+这些公式是理想化上界，不包含 MQSim 的完整调度、FTL、GC、缓存和 host
+开销。性能报告应同时给出请求大小、读写比例、地址模式、队列深度与所用
+XML，不能只引用理论值。

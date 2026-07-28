@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║       Ascend A3 local-NVMe proxy — Huawei ES3600P V7 3.2 TB             ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  ── 模型边界 ─────────────────────────────────────────────────────────────
+  本文件模拟一块可用于 Ascend A3 服务器的 ES3600P V7 3.2 TB NVMe SSD，
+  不是 Ascend A3 整机的八盘聚合模型，也不宣称还原该 SSD 未公开的 NAND
+  channel / package / die / plane 物理组织。
+
+  Atlas 800I/800T A3 官方资料公开的是整机拓扑：单机最大支持
+  8 × 2.5-inch NVMe + 2 × 2.5-inch SATA，NVMe 通过 CPU 直出 PCIe 连接；
+  其白皮书将 SSD 规格指向《ES3000 V7 NVMe PCIe SSD 用户指南》。
+
+  ── 官方资料来源（查询日期：2026-07-25）─────────────────────────────────
+  [1] Huawei Atlas 800I A3 SuperPoD Technical White Paper, document 07:
+      https://e.huawei.com/cn/documents/products/computing/5f99170196404c5f90a7d0638c613652.html
+  [2] Huawei ES3000 series NVMe SSD official product specification:
+      https://e.huawei.com/cn/products/computing/kunpeng/components/nvmessd
+  [3] ES3000 V7 Series NVMe SSD brochure:
+      https://e.huawei.com/cn/documents/solutions/computing/396fa5acac9344098956958887cbf78e.html
+
+  ── ES3600P V7 3.2 TB 官方端点规格 ───────────────────────────────────────
+    Form factor        = U.2, 2.5-inch, 15 mm
+    Host interface     = PCIe 5.0 ×4
+    Protocol           = NVMe 2.0
+    NAND type          = 3D TLC
+    Capacity           = 3,200 GB
+    Sequential R/W     = up to 14,800 / 11,000 MB/s
+    Random R/W @ 4 KB  = up to 3,450K / 900K IOPS
+    Average R/W @ QD1  = 55 / 7 µs
+    Endurance          = 3 DWPD for 5 years
+
+  上述值是整盘端到端指标。MQSim XML 无法直接用这些指标反推出 NAND 几何；
+  下列内部参数是为了逼近官方容量、随机读 IOPS 和顺序读带宽而采用的校准假设。
+
+  ── MQSim 内部校准几何（非官方 BOM）──────────────────────────────────────
+    CHANNELS          = 16        由 14.8 GB/s 端点目标和 1 GB/s/ch 上限推导
+    CHIPS_PER_CH      =  4        并行度假设
+    DIES_PER_CHIP     =  2        并行度假设
+    PLANES_PER_DIE    =  6        并行度/容量假设
+    ─────────────────────────────────────────
+    TOTAL_DIES        = 16×4×2 = 128
+    TOTAL_PLANES      = 128×6  = 768
+
+  ── 容量校准（非官方 NAND 几何）──────────────────────────────────────────
+    PAGE_SIZE_BYTES   = 16,384 B + 1,942 B metadata (建模假设)
+    PAGES_PER_BLOCK   = 576 (建模假设)
+    BLOCKS_PER_PLANE  = 475 (按 3.2 TB logical capacity 校准)
+    ─────────────────────────────────────────
+    每 Block 容量       = 576 × 16 KB ≈ 9.2 MB
+    Raw NAND 总容量     = 16×4×2×6×475×576×16 KB
+                        ≈ 3,443 GB
+    Logical capacity   = Raw × (1 - OP) = 3,443 × 0.93
+                        ≈ 3,202 GB ≈ 3.2 TB
+
+  ── 时序校准（非官方 NAND 时序）──────────────────────────────────────────
+    NAND 读 (tR)       = 37,000 / 45,000 / 37,000 ns
+                         使 128 dies / 37 µs ≈ 3.46M read IOPS，
+                         接近官方 3.45M @ 4 KB 端点指标
+    NAND 写 (tProg)    = 390,000 ns (TLC 建模假设)
+    NAND 擦除 (tErase) = 3,500,000 ns (TLC 建模假设)
+    Channel BW         = 1,000 MB/s/ch (MQSim integer-ns timing limit)
+    Total Channel BW   = 16 × 1,000 = 16,000 MB/s = 16.0 GB/s
+    Flash protocol     = NVDDR2 (MQSim 可表达的协议模型，不代表实盘协议)
+    P/E Cycles         = 3,000 (寿命模型假设；不等同于官方 3 DWPD)
+
+  ── Host / controller 建模 ─────────────────────────────────────────────────
+    PCIe Gen5 ×4       = 官方接口；MQSim 配置为 4 GB/s/lane
+    NVMe Queue Depth   = 65,535 (协议上限假设，非官方实盘队列实测值)
+    DRAM Cache         = 2 GB (建模假设，官方未披露)
+    Mapping Table      = IDEAL (诊断上界；先排除 CMT miss / mapping I/O)
+    CMT Capacity       = 16 MiB (Ideal=true 时不参与性能；保留备用)
+
+  ── FTL / GC 配置（均为建模假设）──────────────────────────────────────────
+    Address Mapping    = PAGE_LEVEL
+    Plane Allocation   = CWDP (Channel → Way/Chip → Die → Plane)
+    GC Policy          = RGA (Greedy), threshold 5%, hard threshold 0.5%
+    Overprovisioning   = 7%
+    Wear Leveling      = Dynamic + Static (threshold 100)
+
+  ── 理论性能 (CWDP Pipeline Model, pymqsim.performance_model) ──────────────
+    公式: BusTime = CMD + Setup + DataOut
+          DataOut = (ReqSize/2) × (2000/CH_BW_MBps) ns
+          DiesPerCH = CHIPS_PER_CH × DIES_PER_CHIP
+          PipeCycle = max(tR, DiesPerCH × BusTime)
+          IOPS = TOTAL_DIES × 1e9 / PipeCycle
+          BW   = IOPS × ReqSize / 1e6 (MB/s)
+          BusUtil = DiesPerCH×DataOut / PipeCycle
+
+    ReqSize   IOPS           BW               BusUtil   判定
+    ─────────────────────────────────────────────────────────────
+      4 KB    3,459,459     14,170 MB/s (14.2 GB/s)   88.6%   过渡区
+      8 KB    1,879,699     15,398 MB/s (15.4 GB/s)   96.2%   BW-Bound
+     16 KB      957,854     15,693 MB/s (15.7 GB/s)   98.1%   BW-Bound
+     32 KB      483,559     15,845 MB/s (15.8 GB/s)   99.0%   BW-Bound
+    128 KB      121,773     15,961 MB/s (16.0 GB/s)   99.8%   BW-Bound
+    ─────────────────────────────────────────────────────────────
+    MQSim 内部峰值 BW ≈ 16.0 GB/s；官方整盘顺序读目标为 14.8 GB/s。
+    由于 MQSim 的 channel period 采用整数 ns，无法把单通道精确配置成
+    925 MB/s；端点差异应通过 native 仿真结果验证，不能把 16.0 GB/s
+    解释为 ES3600P V7 官方额定值。
+
+    解读: 4 KB 理论读 IOPS 与官方 3.45M 目标接近；8 KB 及以上主要为
+          bandwidth-bound。16 KB 仅是本代理模型的 NAND page 假设。
+
+-->
+<Execution_Parameter_Set>
+    <Host_Parameter_Set>
+        <!-- ES3600P V7 official host interface: PCIe 5.0 x4. -->
+        <PCIe_Lane_Bandwidth>4.00000</PCIe_Lane_Bandwidth>
+        <PCIe_Lane_Count>4</PCIe_Lane_Count>
+        <SATA_Processing_Delay>400000</SATA_Processing_Delay>
+        <Enable_ResponseTime_Logging>false</Enable_ResponseTime_Logging>
+        <ResponseTime_Logging_Period_Length>1000000</ResponseTime_Logging_Period_Length>
+    </Host_Parameter_Set>
+    <Device_Parameter_Set>
+        <Seed>321</Seed>
+        <Enabled_Preconditioning>false</Enabled_Preconditioning>
+        <Memory_Type>FLASH</Memory_Type>
+        <HostInterface_Type>NVME</HostInterface_Type>
+        <IO_Queue_Depth>65535</IO_Queue_Depth>
+        <Queue_Fetch_Size>512</Queue_Fetch_Size>
+        <Caching_Mechanism>ADVANCED</Caching_Mechanism>
+        <Data_Cache_Sharing_Mode>SHARED</Data_Cache_Sharing_Mode>
+        <!-- Assumption: Huawei does not publish the ES3600P V7 DRAM capacity. -->
+        <Data_Cache_Capacity>2147483648</Data_Cache_Capacity>
+        <Data_Cache_DRAM_Row_Size>8192</Data_Cache_DRAM_Row_Size>
+        <Data_Cache_DRAM_Data_Rate>100</Data_Cache_DRAM_Data_Rate>
+        <Data_Cache_DRAM_Data_Busrt_Size>1</Data_Cache_DRAM_Data_Busrt_Size>
+        <Data_Cache_DRAM_tRCD>13</Data_Cache_DRAM_tRCD>
+        <Data_Cache_DRAM_tCL>13</Data_Cache_DRAM_tCL>
+        <Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
+        <Address_Mapping>PAGE_LEVEL</Address_Mapping>
+        <!--
+          Diagnostic upper bound: bypass CMT misses, mapping-page flash I/O,
+          and modeled mapping-table lookup latency. This is not a claim about
+          the physical ES3600P V7 controller.
+        -->
+        <Ideal_Mapping_Table>true</Ideal_Mapping_Table>
+        <!-- Retained for non-ideal experiments; ignored while Ideal=true. -->
+        <CMT_Capacity>16777216</CMT_Capacity>
+        <CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
+        <Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
+        <Transaction_Scheduling_Policy>PRIORITY_OUT_OF_ORDER</Transaction_Scheduling_Policy>
+        <Overprovisioning_Ratio>0.07</Overprovisioning_Ratio>
+        <GC_Exec_Threshold>0.05000</GC_Exec_Threshold>
+        <GC_Block_Selection_Policy>RGA</GC_Block_Selection_Policy>
+        <Use_Copyback_for_GC>false</Use_Copyback_for_GC>
+        <Preemptible_GC_Enabled>false</Preemptible_GC_Enabled>
+        <GC_Hard_Threshold>0.005000</GC_Hard_Threshold>
+        <Dynamic_Wearleveling_Enabled>true</Dynamic_Wearleveling_Enabled>
+        <Static_Wearleveling_Enabled>true</Static_Wearleveling_Enabled>
+        <Static_Wearleveling_Threshold>100</Static_Wearleveling_Threshold>
+        <Preferred_suspend_erase_time_for_read>700000</Preferred_suspend_erase_time_for_read>
+        <Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
+        <Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- Endpoint-calibrated proxy; the physical NAND BOM is not public. -->
+        <!-- Total model geometry: 16 CH x 4 chip x 2 die x 6 plane.      -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <Flash_Channel_Count>16</Flash_Channel_Count>
+        <Flash_Channel_Width>1</Flash_Channel_Width>
+        <!-- 16 x 1000 MB/s provides headroom for the official 14.8 GB/s read target. -->
+        <!-- MQSim integer-ns channel periods cannot express rates above 1000 MB/s. -->
+        <Channel_Transfer_Rate>1000</Channel_Transfer_Rate>
+        <Chip_No_Per_Channel>4</Chip_No_Per_Channel>
+        <!-- MQSim protocol proxy; this is not an ES3600P V7 protocol disclosure. -->
+        <Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
+        <Flash_Parameter_Set>
+            <!-- 3D TLC is official; all following internal geometry/timing is inferred. -->
+            <Flash_Technology>TLC</Flash_Technology>
+            <CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
+            <!-- Calibrated so 128 model dies / 37us ~= official 3.45M read IOPS. -->
+            <Page_Read_Latency_LSB>37000</Page_Read_Latency_LSB>
+            <Page_Read_Latency_CSB>45000</Page_Read_Latency_CSB>
+            <Page_Read_Latency_MSB>37000</Page_Read_Latency_MSB>
+            <!-- TLC program-latency assumption; not disclosed by Huawei. -->
+            <Page_Program_Latency_LSB>390000</Page_Program_Latency_LSB>
+            <Page_Program_Latency_CSB>390000</Page_Program_Latency_CSB>
+            <Page_Program_Latency_MSB>390000</Page_Program_Latency_MSB>
+            <!-- TLC erase-latency assumption; not disclosed by Huawei. -->
+            <Block_Erase_Latency>3500000</Block_Erase_Latency>
+            <!-- Lifetime-model assumption; official endurance is 3 DWPD for 5 years. -->
+            <Block_PE_Cycles_Limit>3000</Block_PE_Cycles_Limit>
+            <Suspend_Erase_Time>700000</Suspend_Erase_Time>
+            <Suspend_Program_Time>100000</Suspend_Program_Time>
+            <!-- Package/die/plane counts are model parallelism assumptions. -->
+            <Die_No_Per_Chip>2</Die_No_Per_Chip>
+            <Plane_No_Per_Die>6</Plane_No_Per_Die>
+            <!-- 475 blocks/plane calibrates MQSim logical capacity to about 3.2 TB. -->
+            <Block_No_Per_Plane>475</Block_No_Per_Plane>
+            <!-- Pages per block is a capacity-model assumption. -->
+            <Page_No_Per_Block>576</Page_No_Per_Block>
+            <!-- NAND page and metadata sizes are model assumptions, not NVMe LBA sizes. -->
+            <Page_Capacity>16384</Page_Capacity>
+            <Page_Metadat_Capacity>1942</Page_Metadat_Capacity>
+        </Flash_Parameter_Set>
+    </Device_Parameter_Set>
+</Execution_Parameter_Set>

@@ -1,4 +1,4 @@
-"""MQSim trace generation — geometry, CWDP addressing, theory, trace file I/O.
+"""MQSim trace generation — geometry, CWDP addressing, and trace file I/O.
 
 NAND geometry parameters (CHANNELS, PAGE_SIZE_BYTES, …) have **no defaults** —
 they must be loaded from an MQSim ssdconfig.xml via ``load_from_ssdconfig_xml()``
@@ -56,11 +56,17 @@ NAND_tR_NS:      int = None
 CMD_TRANSFER_NS: int = None
 DATA_SETUP_NS:   int = None
 
+# Host / system limits (set from ssdconfig.xml)
+IO_QUEUE_DEPTH:       int = None
+PCIE_LANE_BW_GBPS:  float = None
+PCIE_LANE_COUNT:      int = None
+
 # Universal constant (MQSim internal, always 512)
 SECTOR_SIZE: int = 512
 
 # Derived — computed after geometry is loaded
 SECTORS_PER_PAGE:      int = None
+TOTAL_DIES:            int = None
 TOTAL_PLANES:          int = None
 TOTAL_CHANNEL_BW_MBPS: int = None
 
@@ -84,11 +90,12 @@ def _require_loaded():
 
 def _recompute_derived():
     """Recompute derived constants after geometry has been set."""
-    global SECTORS_PER_PAGE, TOTAL_PLANES, TOTAL_CHANNEL_BW_MBPS, _loaded
+    global SECTORS_PER_PAGE, TOTAL_DIES, TOTAL_PLANES, TOTAL_CHANNEL_BW_MBPS, _loaded
     if any(globals()[n] is None for n in _GEOMETRY_NAMES):
         raise RuntimeError("Cannot recompute: some geometry values are still None")
     SECTORS_PER_PAGE = PAGE_SIZE_BYTES // SECTOR_SIZE
-    TOTAL_PLANES = CHANNELS * CHIPS_PER_CH * DIES_PER_CHIP * PLANES_PER_DIE
+    TOTAL_DIES = CHANNELS * CHIPS_PER_CH * DIES_PER_CHIP
+    TOTAL_PLANES = TOTAL_DIES * PLANES_PER_DIE
     TOTAL_CHANNEL_BW_MBPS = CHANNELS * CHANNEL_BW_MBPS
     _loaded = True
 
@@ -105,6 +112,9 @@ def load_from_ssdconfig_xml(xml_path: str) -> Dict[str, int]:
 
     Returns a dict ``{name: value}`` of all loaded values.
     """
+    global _loaded
+    _loaded = False
+
     if not os.path.isfile(xml_path):
         raise FileNotFoundError(f"SSD config not found: {xml_path}")
 
@@ -145,12 +155,38 @@ def load_from_ssdconfig_xml(xml_path: str) -> Dict[str, int]:
     loaded['CMD_TRANSFER_NS'] = proto_params['CMD_TRANSFER_NS']
     loaded['DATA_SETUP_NS'] = proto_params['DATA_SETUP_NS']
 
+    # ---- host / system limits ----
+    hps = root.find('.//Host_Parameter_Set')
+    loaded.update(_xml_int('IO_QUEUE_DEPTH', dps, 'IO_Queue_Depth'))
+    loaded.update(_xml_float('PCIE_LANE_BW_GBPS', hps, 'PCIe_Lane_Bandwidth'))
+    loaded.update(_xml_int('PCIE_LANE_COUNT', hps, 'PCIe_Lane_Count'))
+
     # Verify all required names are loaded
     missing = [n for n in _GEOMETRY_NAMES if n not in loaded]
     if missing:
         raise ValueError(
             f"SSD config missing required tags: {missing}\n"
             f"File: {xml_path}"
+        )
+
+    non_positive = [
+        name for name in _GEOMETRY_NAMES
+        if isinstance(loaded[name], (int, float)) and loaded[name] <= 0
+    ]
+    if non_positive:
+        raise ValueError(
+            f"SSD config values must be > 0: {non_positive}\n"
+            f"File: {xml_path}"
+        )
+
+    # MQSim converts the channel rate to an integer clock period with
+    # ``(sim_time_type)(1000.0 / rate) * 2``.  Above 1000 MB/s the cast
+    # becomes zero and the simulator no longer advances channel time.
+    if loaded['CHANNEL_BW_MBPS'] > 1000:
+        raise ValueError(
+            "Channel_Transfer_Rate must be <= 1000 MB/s for MQSim's "
+            "integer-nanosecond timing model; "
+            f"got {loaded['CHANNEL_BW_MBPS']} in {xml_path}"
         )
 
     _recompute_derived()
@@ -188,44 +224,6 @@ def load_from_workload_xml(xml_path: str) -> Dict[str, list]:
     return result
 
 # =====================================================================
-# Theory formulas  (peak IOPS / bandwidth estimation without simulation)
-# =====================================================================
-
-def theory_iops(request_size_bytes: int) -> float:
-    """Theoretical max IOPS under CWDP perfect interleaving.
-
-    Pipeline model (NVDDR2):
-      BusTime  = CMD(290) + Setup(30) + DataOut
-      DataOut  = (S / 2) × (2000 / CHANNEL_BW_MBPS)  ns
-      PipeCycle = tR + CHANNELS × BusTime
-      IOPS     = (CHANNELS × PLANES_PER_DIE × … ) / PipeCycle
-    """
-    _require_loaded()
-    data_out_ns = (request_size_bytes / 2.0) * (2000.0 / CHANNEL_BW_MBPS)
-    bus_time_ns = CMD_TRANSFER_NS + DATA_SETUP_NS + data_out_ns
-    pipeline_cycle_ns = NAND_tR_NS + CHANNELS * bus_time_ns
-    return 64e9 / pipeline_cycle_ns
-
-
-def theory_bandwidth_mbps(request_size_bytes: int) -> float:
-    """Theoretical peak bandwidth (MB/s) = IOPS × request_size_bytes / 1e6."""
-    return theory_iops(request_size_bytes) * request_size_bytes / 1e6
-
-
-def theory_bus_utilization(request_size_bytes: int) -> float:
-    """Bus utilization U(S) = variable / (fixed + variable).
-
-    U < 0.50 → IOPS-Bound      (bottleneck: NAND tR + CMD overhead)
-    U > 0.90 → Bandwidth-Bound  (bottleneck: channel bus bandwidth)
-    """
-    _require_loaded()
-    data_out_ns = (request_size_bytes / 2.0) * (2000.0 / CHANNEL_BW_MBPS)
-    fixed_cost = NAND_tR_NS + CHANNELS * (CMD_TRANSFER_NS + DATA_SETUP_NS)
-    variable_cost = CHANNELS * data_out_ns
-    return variable_cost / (fixed_cost + variable_cost)
-
-
-# =====================================================================
 # Convenience aliases
 # =====================================================================
 
@@ -259,10 +257,19 @@ class TraceSliceConfig:
 
     merge_contiguous  — merge adjacent same-type requests before slicing.
     request_size      — max bytes per trace line after slicing.
+                        Must be > 0 and a multiple of 512 (SECTOR_SIZE).
     """
     merge_contiguous: bool = True
     request_size: int = 131072
-    cwdp_aware: bool = False  # if True, apply CWDP stride correction to avoid channel collapse
+
+    def __post_init__(self):
+        if self.request_size <= 0:
+            raise ValueError(
+                f"request_size must be > 0, got {self.request_size}")
+        if self.request_size % 512 != 0:
+            raise ValueError(
+                f"request_size must be a multiple of 512 (SECTOR_SIZE), "
+                f"got {self.request_size}")
 
     @classmethod
     def from_dict(cls, d: Dict | None) -> "TraceSliceConfig":
@@ -271,18 +278,7 @@ class TraceSliceConfig:
         return cls(
             merge_contiguous=d.get("merge_contiguous", True),
             request_size=d.get("request_size", 131072),
-            cwdp_aware=d.get("cwdp_aware", False),
         )
-
-
-# ---- CWDP helper (only used when cfg.cwdp_aware=True) ----
-
-def _cwdp_stride(pages_per_line: int) -> int:
-    """Smallest stride >= pages_per_line that is co-prime with CHANNELS."""
-    s = pages_per_line
-    while math.gcd(s, CHANNELS) != 1:
-        s += 1
-    return s
 
 
 # =====================================================================
@@ -299,33 +295,30 @@ def merge_sequential(
     if not mem_req_list:
         return [], [], []
 
-    reads  = [mr for mr in mem_req_list
-              if mr.memory_object.req_type == MemoryRequestType.KREAD]
-    writes = [mr for mr in mem_req_list
-              if mr.memory_object.req_type == MemoryRequestType.KWRITE]
-
     merged_addr, merged_size, merged_type = [], [], []
 
-    for group, mqsim_type in ((reads, 1), (writes, 0)):
-        if not group:
-            continue
-        group.sort(key=lambda mr: mr.memory_object.addr)
+    first = mem_req_list[0].memory_object
+    cur_addr = first.addr
+    cur_size = first.size
+    cur_type = 1 if first.req_type == MemoryRequestType.KREAD else 0
 
-        cur_addr = group[0].memory_object.addr
-        cur_size = group[0].memory_object.size
-        for req in group[1:]:
-            obj = req.memory_object
-            if obj.addr == cur_addr + cur_size:
-                cur_size += obj.size
-            else:
-                merged_addr.append(cur_addr)
-                merged_size.append(cur_size)
-                merged_type.append(mqsim_type)
-                cur_addr = obj.addr
-                cur_size = obj.size
+    for req in mem_req_list[1:]:
+        obj = req.memory_object
+        mqsim_type = 1 if obj.req_type == MemoryRequestType.KREAD else 0
+        if mqsim_type == cur_type and obj.addr == cur_addr + cur_size:
+            cur_size += obj.size
+            continue
+
         merged_addr.append(cur_addr)
         merged_size.append(cur_size)
-        merged_type.append(mqsim_type)
+        merged_type.append(cur_type)
+        cur_addr = obj.addr
+        cur_size = obj.size
+        cur_type = mqsim_type
+
+    merged_addr.append(cur_addr)
+    merged_size.append(cur_size)
+    merged_type.append(cur_type)
 
     return merged_addr, merged_size, merged_type
 
@@ -336,11 +329,11 @@ def build_trace_lines(
 ) -> Tuple[List[int], List[int], List[int]]:
     """MemoryRequests → (addr, size, type) trace-line triples.
 
-    Pipeline: merge → slice by request_size → page-align.
+    Pipeline: merge → sector-align → slice by request_size.
 
-    Trace lines faithfully record the addresses from MemoryRequests —
-    no CWDP stride correction or address redistribution is applied.
-    Addresses are written in their natural order.
+    Addresses are sector-aligned: the range [addr, addr+size) is expanded
+    to [aligned_down(addr), aligned_up(addr+size)), matching real NVMe
+    behaviour where the device only sees sector-granularity LBAs.
     """
     if not mem_req_list:
         return [], [], []
@@ -355,53 +348,22 @@ def build_trace_lines(
             for mr in mem_req_list
         ]
 
-    # 2. slice by request_size, page-align, optional CWDP-aware distribution
+    # 2. sector-align + slice by request_size
     addr_list, size_list, type_list = [], [], []
 
     for base_addr, total_size, rtype in chunks:
-        line_size = min(total_size, cfg.request_size)
-        n_lines = math.ceil(total_size / line_size)
-
-        if not cfg.cwdp_aware or n_lines <= 1:
-            # ── default: sequential slicing ──
-            offset = 0
-            while offset < total_size:
-                chunk = min(total_size - offset, line_size)
-                aligned = align_lba((base_addr + offset) // SECTOR_SIZE) * SECTOR_SIZE
-                addr_list.append(aligned)
-                size_list.append(chunk)
-                type_list.append(rtype)
-                offset += chunk
-        else:
-            # ── cwdp_aware: CWDP stride correction ──
-            start_page = base_addr // PAGE_SIZE_BYTES
-            if line_size < PAGE_SIZE_BYTES:
-                # sub-page: multi-round traversal
-                lines_per_page = PAGE_SIZE_BYTES // line_size
-                num_pages = math.ceil(n_lines / lines_per_page)
-                emitted = 0
-                for off_idx in range(lines_per_page):
-                    for pg in range(num_pages):
-                        if emitted >= n_lines:
-                            break
-                        addr = ((start_page + pg) * PAGE_SIZE_BYTES + off_idx * line_size)
-                        actual = min(line_size, total_size - emitted * line_size)
-                        addr_list.append(addr)
-                        size_list.append(actual)
-                        type_list.append(rtype)
-                        emitted += 1
-                    if emitted >= n_lines:
-                        break
-            else:
-                # super-page: co-prime stride
-                pages_per_line = line_size // PAGE_SIZE_BYTES
-                stride_pages = _cwdp_stride(pages_per_line)
-                for i in range(n_lines):
-                    addr = (start_page + i * stride_pages) * PAGE_SIZE_BYTES
-                    actual = min(line_size, total_size - i * line_size)
-                    addr_list.append(addr)
-                    size_list.append(actual)
-                    type_list.append(rtype)
+        aligned_start = (base_addr // SECTOR_SIZE) * SECTOR_SIZE
+        aligned_end = ((base_addr + total_size + SECTOR_SIZE - 1)
+                       // SECTOR_SIZE) * SECTOR_SIZE
+        aligned_total = aligned_end - aligned_start
+        line_size = min(aligned_total, cfg.request_size)
+        offset = 0
+        while offset < aligned_total:
+            chunk = min(aligned_total - offset, line_size)
+            addr_list.append(aligned_start + offset)
+            size_list.append(chunk)
+            type_list.append(rtype)
+            offset += chunk
 
     return addr_list, size_list, type_list
 
@@ -417,9 +379,15 @@ def write_trace_file(
 
     Trace format (per line):
         <arrival_ns> <device_id> <lba> <sectors> <req_type>
-    All requests arrive at T=0 (MemoryEngine has no concept of time);
-    device_id cycles 0..15 for MQSim multi-queue compatibility.
+    All requests arrive at T=0 (MemoryEngine has no concept of time).
+
+    device_id is assigned by simple round-robin (``i % CHANNELS``).
+    MQSim defines but does not read this column for physical NAND
+    channel mapping — CWDP address mapping (LPA → Channel) is handled
+    internally by MQSim's FTL.  The device_id column exists only for
+    NVMe multi-queue compatibility.
     """
+    _require_loaded()
     addr_list, size_list, type_list = build_trace_lines(mem_req_list, cfg)
 
     d = os.path.dirname(output_path)
@@ -427,15 +395,19 @@ def write_trace_file(
         os.makedirs(d, exist_ok=True)
 
     total_bytes = 0
+    line_count = 0
     with open(output_path, "w") as f:
         for i, (addr, size, req_type) in enumerate(
-                zip(addr_list, size_list, type_list)):
+            zip(addr_list, size_list, type_list)
+        ):
             lba = addr // SECTOR_SIZE
             sectors = math.ceil(size / SECTOR_SIZE)
-            f.write(f"0 {i % 16} {lba} {sectors} {req_type}\n")
+            device_id = i % CHANNELS
+            f.write(f"0 {device_id} {lba} {sectors} {req_type}\n")
             total_bytes += size
+            line_count += 1
 
-    return total_bytes, len(addr_list)
+    return total_bytes, line_count
 
 
 # =====================================================================
@@ -457,6 +429,27 @@ def _xml_int(name: str, element: ET.Element, tag: str) -> Dict[str, int]:
     except ValueError:
         raise ValueError(
             f"Tag <{tag}> has non-integer value: {child.text.strip()!r}"
+        ) from None
+
+    globals()[name] = new_val
+    return {name: new_val}
+
+
+def _xml_float(name: str, element: ET.Element, tag: str) -> Dict[str, float]:
+    """Extract float from XML element child *tag*, set module global.
+
+    Raises ValueError if the tag is missing or unparseable.
+    """
+    child = element.find(tag)
+    if child is None or not (child.text and child.text.strip()):
+        raise ValueError(
+            f"Missing or empty tag <{tag}> in SSD config"
+        )
+    try:
+        new_val = float(child.text.strip())
+    except ValueError:
+        raise ValueError(
+            f"Tag <{tag}> has non-float value: {child.text.strip()!r}"
         ) from None
 
     globals()[name] = new_val

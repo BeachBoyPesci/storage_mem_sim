@@ -55,21 +55,20 @@ class AnalyticMediaSystem(BaseMediaSystem):
         Returns:
             MediaMetrics with time and request counts populated.
         """
-        total_time = 0.0
+        total_bytes = 0
         num_read = 0
         num_write = 0
 
         for mem_req in mem_req_list:
             obj = mem_req.memory_object
-            size_bytes = obj.size
-            trans_time = size_bytes / self._bandwidth_bytes_per_sec
-            total_time += trans_time
+            total_bytes += obj.size
 
             if obj.req_type == MemoryRequestType.KREAD:
                 num_read += 1
             elif obj.req_type == MemoryRequestType.KWRITE:
                 num_write += 1
 
+        total_time = total_bytes / self._bandwidth_bytes_per_sec
         metrics = MediaMetrics(
             num_read_requests=num_read,
             num_write_requests=num_write,
@@ -77,6 +76,7 @@ class AnalyticMediaSystem(BaseMediaSystem):
             cycles=0,
             num_media_reqs=len(mem_req_list),
             time=total_time,
+            bandwidth=self._bandwidth_bytes_per_sec if total_time > 0 else 0.0,
         )
 
         self.system_metrics.update_from_media(metrics)
@@ -84,5 +84,5 @@ class AnalyticMediaSystem(BaseMediaSystem):
             "Analytic handler: time=%.4fus reads=%d writes=%d "
             "total_bytes=%d",
             total_time * 1e6, num_read, num_write,
-            sum(req.memory_object.size for req in mem_req_list))
+            total_bytes)
         return metrics

@@ -166,9 +166,9 @@ static py::dict collect_flow_stats(Host_System& host, SSD_Device& ssd) {
             (unsigned long long)flow->Get_generated_request_count();
         result["serviced_request_count"] =
             (unsigned long long)flow->Get_serviced_request_count();
-        result["device_response_time_ns"] =
+        result["device_response_time_us"] =
             (unsigned long long)flow->Get_device_response_time();
-        result["end_to_end_request_delay_ns"] =
+        result["end_to_end_request_delay_us"] =
             (unsigned long long)flow->Get_end_to_end_request_delay();
     }
     return result;
@@ -227,11 +227,10 @@ static bool simulate(const std::string& ssd_config_path,
                             + std::to_string(cntr) + ".xml";
             write_results(ssd, host, out);
 
-            // Restore cout momentarily to print flow statistics,
-            // then re-suppress without overwriting old_cout
+            // Restore cout momentarily to print flow statistics
             std::cout.rdbuf(old_cout);
             print_flow_stats(host);
-            std::cout.rdbuf(sink.rdbuf());
+            old_cout = std::cout.rdbuf(sink.rdbuf());
 
             // Capture stats for Python if requested
             if (out_stats != nullptr) {
@@ -241,8 +240,10 @@ static bool simulate(const std::string& ssd_config_path,
 
         ok = true;
     } catch (const std::exception& e) {
+        std::cerr << "[_mqsim] simulation error: " << e.what() << std::endl;
         ok = false;
     } catch (...) {
+        std::cerr << "[_mqsim] unknown simulation error" << std::endl;
         ok = false;
     }
 
@@ -283,7 +284,9 @@ py::dict run_with_stats(const std::string& ssd_config_path,
                          const std::string& workload_config_path,
                          const std::string& output_dir = ".") {
     py::dict stats;
-    simulate(ssd_config_path, workload_config_path, output_dir, &stats);
+    if (!simulate(ssd_config_path, workload_config_path, output_dir, &stats)) {
+        throw std::runtime_error("MQSim simulation failed");
+    }
     return stats;
 }
 
@@ -306,6 +309,6 @@ PYBIND11_MODULE(_mqsim, m) {
           py::arg("output_dir") = ".",
           "Run MQSim simulation and return a dict with key flow statistics "
           "(generated_request_count, serviced_request_count, "
-          "device_response_time_ns, end_to_end_request_delay_ns).  "
+          "device_response_time_us, end_to_end_request_delay_us).  "
           "Also writes workload_scenario_N.xml to output_dir.");
 }
