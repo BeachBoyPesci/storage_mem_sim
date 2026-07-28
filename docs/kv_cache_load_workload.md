@@ -341,6 +341,181 @@ Ramulator/CLI 的带宽使用 `issued_bytes / time`，表示 HBM 实际传输整
 完成时间均近似减半。即使每页命中 16 个 token、page 利用率达到 50%，仍
 存在 2× 读取放大和随机 page 顺序损失，因此明显慢于连续访问。
 
+## DSA KV 加载 DDR 对比实验
+
+本节使用与 HBM 实验相同的 DSA KV workload，对比 32-channel DDR4-3200
+host 近似配置和 32-channel DDR5 MRDIMM-8800 host-side 带宽等效配置。
+实验于 2026-07-25 使用 Ramulator native binding 实际运行。
+
+### DDR 配置与统一假设
+
+| 配置 | Ramulator 配置 | 物理 channel | Controller | 容量 | 目标峰值带宽 | Tick 频率 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| DDR4-3200 | `configs/ramulator/host_ddr4_2tb_819p2gb_per_s_3200.yaml` | 32 × 64 bit | 32 | 2 TiB | 819.2 GB/s | 1600 MHz |
+| MRDIMM-8800 近似 | `configs/ramulator/host_ddr5_mrdimm_4tb_2252p8gb_per_s_8800.yaml` | 32 × 64 bit | 64 × 32 bit | 4 TiB | 2252.8 GB/s | 4405.286 MHz |
+
+DDR4 controller 表示一个完整 64-bit channel；DDR5 DIMM channel 被拆成
+两个独立 32-bit subchannel，因此 32 个插槽使用 64 个 controller。
+MRDIMM 的 2252.8 GB/s 是十进制 `GB/s`：
+
+```text
+32 channel * 64 bit / 8 * 8800e6 = 2252.8e9 B/s = 2252.8 GB/s
+2252.8e9 B/s / 1024^3 = 2098.08 GiB/s = 2.049 TiB/s
+```
+
+因此它是约 2.25 TB/s 或 2.05 TiB/s，不能只写成没有单位口径的“2T”。
+由于 Ramulator 配置使用整数 `tCK_ps=227`，实际 tick 为 4405.286 MHz，
+比目标 4400 MHz 高约 0.12%。
+
+MRDIMM 配置使用 `DDR5_32Gb_x4`、每个 subchannel 两个 rank：
+
+```text
+32 Gb/device * 8 x4 devices/subchannel * 2 ranks
+  = 64 GiB/subchannel
+2 subchannels/DIMM * 64 GiB = 128 GiB/DIMM
+32 DIMMs * 128 GiB = 4 TiB
+```
+
+当前 Ramulator2 没有 MRDIMM multiplexer、buffer 和内部 rank 聚合模型。
+该配置把 MRDIMM 表示成 host-visible 8800 MT/s 的普通双 rank DDR5，
+并按 DDR5-6400AN 的绝对时间缩放主要时序参数。因此本节结果适合比较主机侧
+带宽、地址分布和读取放大，不是 MRDIMM 周期精确模型。
+
+两种 DDR 配置均使用：
+
+```text
+access_tokens        = 2048
+context_tokens       = 131072
+token_size_bytes     = 576
+request_type         = KREAD
+page_alignment_bytes = 1
+seed                 = 42（主结果；token 敏感性检查另行覆盖）
+DP                   = 1
+storage instances    = 1
+Ramulator tx_bytes   = 64
+RefreshManager       = AllBank
+```
+
+这与 HBM 章节的 `NoRefresh` 假设不同，因此 DDR 与 HBM 表格不能直接解释
+成只由介质类型造成的差异。`LoadStoreTrace` 仍尽快注入请求，结果表达深
+outstanding request 窗口下的 DRAM 服务时间，不包含 NUMA 远端访问、
+CPU 间互连、DMA/gather、cache/TLB 或 MRDIMM buffer 的额外系统成本。
+
+从仓库根目录运行：
+
+```bash
+python run.py \
+  --config configs/ramulator/host_ddr4_2tb_819p2gb_per_s_3200.json \
+  --workload <workload.json>
+
+python run.py \
+  --config configs/ramulator/host_ddr5_mrdimm_4tb_2252p8gb_per_s_8800.json \
+  --workload <workload.json>
+```
+
+### Token 粒度：连续与均匀稀疏
+
+本实验复用 HBM 章节的连续 token 和均匀稀疏 token JSON。两种 pattern
+均生成 2048 条逻辑请求，需求和发出字节都是 1,179,648 B。576 B 能被
+64 B transaction 整除，因此均生成 18,432 个 Ramulator transaction，
+没有 transaction 字节放大。
+
+Seed 42 的结果：
+
+| 配置 | Pattern | Cycles | 时间 | 实际发出带宽 |
+| --- | --- | ---: | ---: | ---: |
+| DDR4-3200 | 连续 | 4181 | 2.613 µs | 451.43 GB/s |
+| DDR4-3200 | 均匀稀疏 | 2810 | 1.756 µs | 671.69 GB/s |
+| MRDIMM-8800 近似 | 连续 | 5175 | 1.175 µs | 1004.19 GB/s |
+| MRDIMM-8800 近似 | 均匀稀疏 | 3193 | 724.8 ns | 1627.52 GB/s |
+
+使用 seeds `1、7、42、123、2025` 做均匀稀疏访问敏感性检查：
+
+| 配置 | 连续时间 | 稀疏平均时间 | 稀疏时间范围 | 稀疏平均带宽 | 稀疏/连续时间比 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DDR4-3200 | 2.613 µs | 1.781 µs | 1.741–1.836 µs | 662.26 GB/s | 0.68× |
+| MRDIMM-8800 近似 | 1.175 µs | 717.0 ns | 684.6–741.4 ns | 1645.35 GB/s | 0.61× |
+
+与 HBM 结果不同，当前 DDR 配置中的均匀稀疏 token 访问快于连续访问。
+在 `CacheLineInterleave + RoBaRaCoCh` 映射下，连续 transaction 在每个
+channel 内更集中于相同 bank group，受到 same-bank-group column timing
+约束；随机 token 的 9 个连续 transaction 则随 token 地址分散到更多
+bank/bank group，暴露出更多并行度。这个结果依赖当前地址映射、队列深度和
+时序配置，不能泛化为“真实 DDR 随机访问总是快于连续访问”。
+
+MRDIMM-8800 近似相对 DDR4-3200 的完成时间加速为：
+
+| Pattern | DDR4 时间 | MRDIMM 时间 | MRDIMM 加速 |
+| --- | ---: | ---: | ---: |
+| 连续 | 2.613 µs | 1.175 µs | 2.22× |
+| 均匀稀疏五 seed 平均 | 1.781 µs | 717.0 ns | 2.48× |
+
+### Page 粒度：32-token page 与不同页内命中率
+
+Page workload 与 HBM 章节完全相同：`page_size_tokens=32`，
+`selected_tokens_per_page` 取 `1、2、4、8、16`，seed 为 42。
+单页有效数据仍为 18,432 B，但 DDR transaction 是 64 B：
+
+| 每页命中 token | Page 利用率 | 触达 page | 逻辑请求 | 发出字节 | 读放大 | 64 B transaction |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 3.125% | 2048 | 2048 | 37,748,736 B | 32× | 589,824 |
+| 2 | 6.25% | 1024 | 1024 | 18,874,368 B | 16× | 294,912 |
+| 4 | 12.5% | 512 | 512 | 9,437,184 B | 8× | 147,456 |
+| 8 | 25% | 256 | 256 | 4,718,592 B | 4× | 73,728 |
+| 16 | 50% | 128 | 128 | 2,359,296 B | 2× | 36,864 |
+
+实际完成时间：
+
+| 每页命中 token | DDR4-3200 | MRDIMM-8800 近似 | MRDIMM 加速 |
+| ---: | ---: | ---: | ---: |
+| 1 | 52.858 µs | 19.102 µs | 2.77× |
+| 2 | 26.567 µs | 9.583 µs | 2.77× |
+| 4 | 12.947 µs | 4.805 µs | 2.69× |
+| 8 | 6.174 µs | 2.198 µs | 2.81× |
+| 16 | 3.151 µs | 1.162 µs | 2.71× |
+
+Ramulator/CLI 的带宽为 `issued_bytes / time`，表示实际传输整页数据的介质
+带宽：
+
+| 每页命中 token | DDR4-3200 | MRDIMM-8800 近似 |
+| ---: | ---: | ---: |
+| 1 | 714.15 GB/s | 1976.16 GB/s |
+| 2 | 710.45 GB/s | 1969.61 GB/s |
+| 4 | 728.88 GB/s | 1964.16 GB/s |
+| 8 | 764.22 GB/s | 2146.95 GB/s |
+| 16 | 748.83 GB/s | 2030.35 GB/s |
+
+使用 `demand_bytes / time` 得到 DSA 真正需要的 2048 个 token 的有效需求
+带宽：
+
+| 每页命中 token | DDR4-3200 | MRDIMM-8800 近似 |
+| ---: | ---: | ---: |
+| 1 | 22.32 GB/s | 61.76 GB/s |
+| 2 | 44.40 GB/s | 123.10 GB/s |
+| 4 | 91.11 GB/s | 245.52 GB/s |
+| 8 | 191.06 GB/s | 536.74 GB/s |
+| 16 | 374.42 GB/s | 1015.18 GB/s |
+
+连续 page 基线覆盖 64 个 page，生成的 18,432 个 transaction 与连续
+token 基线相同，因此虽然逻辑请求数从 2048 降为 64，两个 backend 的完成
+时间和带宽都与连续 token 基线相同：
+
+| 配置 | 连续 page 时间 | 连续 page 带宽 |
+| --- | ---: | ---: |
+| DDR4-3200 | 2.613 µs | 451.43 GB/s |
+| MRDIMM-8800 近似 | 1.175 µs | 1004.19 GB/s |
+
+Page 稀疏实验传输的数据量较大，能更充分填满 controller 队列。DDR4 实际
+介质带宽为 710–764 GB/s，MRDIMM 近似为 1964–2147 GB/s。MRDIMM 的理论
+带宽是 DDR4 的 2.75×，Page 完成时间加速为 2.69–2.81×，两者基本一致。
+相较之下，短得多的连续 token/page 基线只达到 451 GB/s 和 1004 GB/s，
+不能用来代表两个配置的饱和峰值带宽。
+
+与 HBM 实验相同，page 利用率仍是主导有效 DSA 性能的因素。即使
+MRDIMM-8800 近似的介质带宽达到约 2 TB/s，每页只命中 1 个 token 时，
+32× 读取放大仍把有效需求带宽压低到 61.76 GB/s；把每页命中数提高到 16
+后，有效需求带宽才提高到 1015.18 GB/s。
+
 ## 后端边界
 
 - Analytic 使用 `issued_bytes / configured bandwidth`，不表达地址差异。

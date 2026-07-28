@@ -1,0 +1,62 @@
+# 32-slot DDR5 MRDIMM-8800 host-side bandwidth approximation.
+#
+# Topology:
+#   32 slots at 1 DIMM per channel (1DPC)
+#   32 physical 64-bit DDR5 channels
+#   64 independent 32-bit DDR5 subchannels/controllers
+#
+# Capacity:
+#   Each 128 GiB DIMM is represented as two 64 GiB subchannels.
+#   Each subchannel uses 8 x4 devices per rank and two 32 Gb ranks:
+#     32 Gb/device * 8 devices * 2 ranks = 512 Gb = 64 GiB
+#   Total: 64 subchannels * 64 GiB = 4096 GiB = 4 TiB.
+#
+# Peak host-side data bandwidth:
+#   64 subchannels * 32 bit / 8 * 8800e6 = 2252.8 GB/s.
+#
+# Ramulator2 currently has no MRDIMM multiplexer/buffer model. This config
+# approximates its host-visible bandwidth with an ordinary two-rank DDR5
+# hierarchy. Time-based DDR5-6400AN constraints are scaled from 312 ps to
+# 227 ps to avoid shrinking absolute DRAM timings when using 8800 MT/s.
+MemorySystem:
+  impl: GenericDRAM
+  clock_ratio: 1
+  ChannelMapper:
+    impl: CacheLineInterleave
+  DRAM:
+    impl: DDR5
+    org:
+      preset: DDR5_32Gb_x4
+      rank: 2
+    timing:
+      preset: DDR5_6400AN
+      rate: 8800
+      tCK_ps: 227
+      nCL: 64
+      nRCD: 64
+      nRP: 64
+      nRAS: 142
+      nRC: 205
+      nWR: 132
+      nRTP: 33
+      nCWL: 61
+      nCCDL: 22
+      nCCDL_WR: 88
+      nWTRS: 7
+      nWTRL: 44
+      nRRDS: 23
+      nRRDL: 23
+      nFAW: 89
+      nRFC: 1807
+      nREFI: 17181
+  Controllers:
+    - impl: GenericDDR
+      count: 64
+      Scheduler:
+        impl: FRFCFS
+      RowPolicy:
+        impl: Open
+      AddrMapper:
+        impl: RoBaRaCoCh
+      RefreshManager:
+        impl: AllBank

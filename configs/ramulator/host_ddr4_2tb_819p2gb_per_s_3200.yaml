@@ -5,6 +5,8 @@
 #
 # The DDR4_16Gb_x4 preset with rank=2 models one 64 GB DDR4 channel:
 #   16 Gb device density * 16 x4 devices/channel * 2 ranks = 512 Gb = 64 GB.
+# All-bank refresh is enabled so this host configuration includes periodic
+# refresh overhead in long-running workloads.
 MemorySystem:
   impl: GenericDRAM
   clock_ratio: 1
@@ -27,4 +29,4 @@ MemorySystem:
       AddrMapper:
         impl: RoBaRaCoCh
       RefreshManager:
-        impl: NoRefresh
+        impl: AllBank

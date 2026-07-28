@@ -20,6 +20,7 @@ MemEngine 是面向 LLM 推理服务的内存/存储介质仿真框架。它把 
 项目自研代码主要是：
 
 - 根目录 Python 文件：engine、请求、配置、指标和 CLI。
+- `workload/`：位于 engine 之上的高层负载生成器；当前包含 KV cache load。
 - `media/*.py`：公共介质层与三个后端适配器。
 - `media/mqsim_wrapper/pymqsim/`、`mqsim_pybind.cpp` 和相关 CMake/setup：MQSim 自研桥接层。
 - `configs/`、`docs/`、`tests/`。
@@ -36,7 +37,11 @@ MemEngine 是面向 LLM 推理服务的内存/存储介质仿真框架。它把 
 ## 架构与数据流
 
 ```text
-service/model workload
+service/model
+        |
+        v
+KV-cache workload (optional)
+  token selector -> page layout -> request generator
         |
         | get_tensor_addr / issue_request
         v
@@ -78,7 +83,7 @@ MediaSystemFactory -> BaseMediaSystem
 | `memory_type.py` | `MemoryType` 和 `MemoryRequestType`；介质读写编码固定为 read=0、write=1。注意 MQSim trace 自身使用 read=1、write=0，由 trace 层转换。 |
 | `memory_object.py` | 一个逻辑访问；记录 addr/size/type，并按 engine granularity 估算 `media_req_num`。实际介质请求数以 backend 返回值为准。 |
 | `memory_request.py` | 逻辑访问的轻量容器；可保存拆分后的 `MediaRequest`。 |
-| `memory_metrics.py` | Engine 单次与累计指标。累计带宽为“模拟实例传输字节数 / 累计时间”；IOPS 只透传并按时间聚合 MQSim 的端到端 device IOPS，Analytic/Ramulator 为 `None`。 |
+| `memory_metrics.py` | Engine 单次与累计指标。累计带宽为”模拟实例传输字节数 / 累计时间”；IOPS 只透传并按时间聚合 MQSim 的端到端 device IOPS，Analytic/Ramulator 为 `None`。 |
 | `media/base_media.py` | 后端抽象接口 `handler_mem_request(List[MemoryRequest]) -> MediaMetrics` 与后端累计指标。 |
 | `media/media_config.py` | 公共及 backend-specific 配置；保持公共字段的单位兼容性。 |
 | `media/media_system_factory.py` | 后端注册和惰性创建。新增后端应扩展 enum、实现类、注册逻辑和测试。 |
@@ -88,7 +93,76 @@ MediaSystemFactory -> BaseMediaSystem
 | `media/mqsim_wrapper/pymqsim/trace.py` | byte address 到 LBA、相邻同类型请求合并、request-size 切片、CWDP 地址布局及理论上界公式。几何函数调用前必须加载 SSD XML。 |
 | `media/mqsim_wrapper/pymqsim/workload.py` | 用模板生成 workload XML，只负责替换 trace 路径。 |
 | `media/mqsim_wrapper/pymqsim/simulator.py` / `output.py` | native binding 调用、输出文件定位与指标解析。 |
-| `run.py` | JSON 驱动的示例/CLI，不是独立配置框架；相对配置路径按当前工作目录解析。 |
+| `run.py` | JSON 驱动的示例/CLI；`--workload/-w` 加载 KV workload JSON，自动分配完整 KV region 后通过 engine 执行。相对配置路径按当前工作目录解析。 |
+
+## KV cache load workload
+
+`workload/kv_cache_load/` 是当前唯一的正式高层 workload。它位于
+`MemoryEngine` 之上，只生成 byte address、byte size 和
+`MemoryRequestType`，不能直接调用 Ramulator/MQSim wrapper，也不能为了
+workload 修改 `media/` 默认行为。
+
+### 数据和 page 语义
+
+- 一个 token 是不可拆分的逻辑对象；`token_size_bytes` 是当前仿真对象范围内
+  一个完整 token 的字节数，常见示例为 576 B 或 640 B。当前不建模 token
+  内部 component。
+- `page_size_tokens` 是一个软件 KV page（例如 vLLM block/SGLang page）中的
+  token 数，不是 OS page、DRAM row 或 NAND page。
+- 单个完整软件 page 的有效数据量为
+  `page_data_bytes = page_size_tokens * token_size_bytes`。
+- 相邻软件 page 的地址距离为
+  `page_stride_bytes = align_up(page_data_bytes, page_alignment_bytes)`；
+  对齐 padding 只影响地址间距，page 粒度请求大小仍为 `page_data_bytes`。
+- `KVPageLayout.required_region_size()` 按完整软件 page 分配 context region；
+  CLI workload JSON 中 `base_addr` 必须省略或为 0，由 `run.py` 调用
+  `MemoryEngine.get_tensor_addr()` 分配。
+
+### Pattern 与加载粒度
+
+| 配置 | 精确语义 |
+| --- | --- |
+| `CONTIGUOUS` | 从 `start_token` 开始选择连续 `access_tokens` 个 token；`start_token` 只允许用于该 pattern。 |
+| `SPARSE_UNIFORM` | 使用 `seed` 从 `[0, context_tokens)` 无放回均匀采样 `access_tokens` 个 token；采样顺序就是 workload 顺序。 |
+| `SPARSE_PAGE_LOCAL` | 随机打乱软件 page，再从每个 page 随机选最多 `selected_tokens_per_page` 个 token，直到得到 `access_tokens` 个 token。 |
+| `TOKEN` granularity | 每个被选 token 生成一条大小为 `token_size_bytes` 的请求，并保留 selector 顺序。 |
+| `PAGE` granularity | 将被选 token 映射到 page，按首次触达顺序对 page ID 去重；每个唯一 page 生成一条大小为 `page_data_bytes` 的请求。 |
+
+workload 层不排序、不合并相邻请求。Page 粒度的首次触达去重是“一个软件
+page 只加载一次”的语义，不属于请求合并。请求进入 engine 后，backend 仍可
+按自身配置执行转换：Ramulator 拆分 DRAM transaction；MQSim 根据
+`mqsim.json` 的 `merge_contiguous` 和 `request_size` 执行 trace 合并与切片。
+
+`GeneratedKVCacheLoad.stats` 的口径：
+
+- `selected_tokens`：selector 产生的 token 数；
+- `unique_pages`：这些 token 命中的唯一软件 page 数；
+- `logical_requests`：提交到 `MemoryEngine` 的请求数；
+- `demand_bytes = selected_tokens * token_size_bytes`；
+- `issued_bytes = sum(request sizes)`；
+- `page_utilization = selected_tokens / (unique_pages * page_size_tokens)`；
+- `read_amplification = issued_bytes / demand_bytes`。
+
+以上都是 workload/engine 入口口径，不等于 Ramulator transaction 数或 MQSim
+trace line/sector 数。
+
+### JSON 与 CLI
+
+KV JSON 的必填字段是 `access_tokens`、`context_tokens`、
+`token_size_bytes`、`pattern` 和 `granularity`；可选
+`workload_type` 固定为 `kv_cache_load`。样例位于
+`configs/workloads/`，覆盖三种 pattern 和两种粒度的全部六种组合。
+
+```bash
+cd ..
+python -m storage_mem_sim.run \
+  -c storage_mem_sim/configs/analytic.json \
+  -w storage_mem_sim/configs/workloads/kv_sparse_page.json
+```
+
+`--workload` 不能与通用负载参数 `--num-requests`、`--size` 同时使用。当前
+CLI 明确要求 `storage_instance_num=1`；程序化使用也应维持单 instance 假设，
+除非后续任务明确设计多 instance workload 语义。
 
 ## 后端选择与分析方法
 
@@ -150,6 +224,8 @@ python -m pip install -e '.[dev]'
 验证策略：
 
 - 纯 engine、配置、metrics、Analytic 或 MQSim trace/XML 逻辑：运行相应单测，最后运行完整 `pytest`。
+- KV workload 变更：运行 `python -m pytest tests/workload/kv_cache_load`；修改 selector、layout、单位、page 去重或统计公式时，必须补充对应边界测试。
+- KV workload 的 Ramulator/MQSim 看护分别使用 `ramulator_native` 和 `mqsim_native` marker；交付时明确 native 测试是实际运行还是跳过。
 - Ramulator 变更：除单元测试外运行 `tests/test_ramulator_integration.py`；未安装 native binding 时相关测试会跳过，交付说明必须明确“跳过”而非“通过”。
 - MQSim native/C++ 变更：运行 trace/XML 单测和 native integration tests，确认输出解析，并用小 workload 做一次端到端仿真。
 - 文档/配置变更：至少运行 Analytic CLI，并检查文档中的路径、单位和命令与当前代码一致。
@@ -164,6 +240,13 @@ git submodule update --init media/mqsim_wrapper/MQSim
 python -m pip install -e media/mqsim_wrapper
 ```
 
+显式运行 KV workload native tests：
+
+```bash
+python -m pytest tests/workload/kv_cache_load -m ramulator_native
+python -m pytest tests/workload/kv_cache_load -m mqsim_native
+```
+
 ## 常见陷阱
 
 - 仓库目录名是 `storage_mem_sim`，但发行包名是 `memengine`；源码使用相对导入，示例通常通过 `python -m storage_mem_sim.run` 从父目录运行。
@@ -174,11 +257,17 @@ python -m pip install -e media/mqsim_wrapper
 - MQSim XML 的 IOPS 是 trace 请求经过 NVMe/PCIe/SSD 路径后的端到端 device IOPS，不是 NAND 内部 page read/program transaction rate；Analytic 和 Ramulator 不提供 IOPS。
 - MQSim `handler_mem_request()` 会在 wrapper 的 `trace/` 下保留生成 trace/workload/output；不要把运行产物误当源码提交。
 - `configs/mqsim.json` 中的字段不一定都被 CLI 使用；新增或依赖字段前沿 `run.py -> MediaConfig -> backend` 路径确认实际生效。
+- `access_tokens` 始终表示 selector 选择的 token 数，不直接表示 page 数。对 `SPARSE_PAGE_LOCAL`，完整 page 条件下预计触达 page 数为 `ceil(access_tokens / selected_tokens_per_page)`。
+- `SPARSE_UNIFORM + PAGE` 是“随机 token 后映射到唯一 page”，最终 page 数不是固定配置值；若要可控的随机 page 数，使用 `SPARSE_PAGE_LOCAL + PAGE`。
+- `page_data_bytes` 是单个软件 page 的有效数据量；本次 page 请求总字节数是 `unique_pages * page_data_bytes`，不要把它误写成整个 workload 的 page 大小。
+- workload 的“不合并”只约束 generator 输出。MQSim 是否继续合并由 `configs/mqsim.json` 的 `merge_contiguous` 决定，trace slice size 由同一配置的 `request_size` 决定。
+- KV CLI 状态栏中的 `Trace slice` 是 MQSim backend 参数；实际 KV 请求数以结果区的 `Requests`/`GeneratedKVCacheLoad.stats.logical_requests` 为准。
 
 ## 相关文档
 
 - `README.md`：安装和快速运行入口。
 - `docs/design.md`：较详细的架构背景；可能落后于实现，使用时与本文件和源码核对。
+- `docs/kv_cache_load_workload.md`：KV workload 的 pattern、token/page 粒度、JSON 配置、统计口径和 backend 边界。
 - `docs/ramulator_config.md`：Ramulator 配置说明。
 - `docs/MQSim后端说明.md`：MQSim 后端总览。
 - `docs/trace_generation_analysis.md`、`docs/MQSim_xml说明.md`：trace 生成、地址转换和 XML 专题。
@@ -192,3 +281,4 @@ python -m pip install -e media/mqsim_wrapper
 4. 是否覆盖正常、空输入、边界、未对齐和无效配置？
 5. 高精度后端测试是真正运行还是因依赖缺失跳过？
 6. README、配置示例、设计文档和本文件是否需要同步？
+7. 若修改 KV workload，是否仍只通过 `MemoryEngine` 对接 backend，并保持 selector 顺序、page 首次触达去重和统计口径一致？

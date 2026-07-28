@@ -2,8 +2,8 @@
     "mem_type": "DDR",
     "media_config": {
         "media_type": "ramulator",
-        "capacity": 2048.0,
-        "config": "configs/ramulator/host_ddr5_2tb_1331p2gb_per_s_5200.yaml",
+        "capacity": 4096.0,
+        "config": "configs/ramulator/host_ddr5_mrdimm_4tb_2252p8gb_per_s_8800.yaml",
         "dp": 1,
         "instances": 1
     }
