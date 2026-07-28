@@ -70,7 +70,8 @@
     PCIe Gen5 ×4       = 官方接口；MQSim 配置为 4 GB/s/lane
     NVMe Queue Depth   = 65,535 (协议上限假设，非官方实盘队列实测值)
     DRAM Cache         = 2 GB (建模假设，官方未披露)
-    CMT Capacity       = 16 MiB (MQSim 字段单位为 byte；建模假设)
+    Mapping Table      = IDEAL (诊断上界；先排除 CMT miss / mapping I/O)
+    CMT Capacity       = 16 MiB (Ideal=true 时不参与性能；保留备用)
 
   ── FTL / GC 配置（均为建模假设）──────────────────────────────────────────
     Address Mapping    = PAGE_LEVEL
@@ -132,8 +133,13 @@
         <Data_Cache_DRAM_tCL>13</Data_Cache_DRAM_tCL>
         <Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
         <Address_Mapping>PAGE_LEVEL</Address_Mapping>
-        <Ideal_Mapping_Table>false</Ideal_Mapping_Table>
-        <!-- Assumption: 16 MiB mapping-table cache; MQSim unit is bytes. -->
+        <!--
+          Diagnostic upper bound: bypass CMT misses, mapping-page flash I/O,
+          and modeled mapping-table lookup latency. This is not a claim about
+          the physical ES3600P V7 controller.
+        -->
+        <Ideal_Mapping_Table>true</Ideal_Mapping_Table>
+        <!-- Retained for non-ideal experiments; ignored while Ideal=true. -->
         <CMT_Capacity>16777216</CMT_Capacity>
         <CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
         <Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
