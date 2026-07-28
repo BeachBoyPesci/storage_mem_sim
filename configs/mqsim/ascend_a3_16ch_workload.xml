@@ -3,7 +3,11 @@
     <IO_Scenario>
         <IO_Flow_Parameter_Set_Trace_Based>
             <Priority_Class>URGENT</Priority_Class>
-            <Device_Level_Data_Caching_Mode>WRITE_CACHE</Device_Level_Data_Caching_Mode>
+            <!--
+              Diagnostic NAND/FTL path: bypass MQSim's device-level DRAM data
+              cache so short traces are not acknowledged at cache-ingress speed.
+            -->
+            <Device_Level_Data_Caching_Mode>TURNED_OFF</Device_Level_Data_Caching_Mode>
             <!-- 16 channels (0–15), matching Flash_Channel_Count=16 -->
             <Channel_IDs>0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15</Channel_IDs>
             <!-- 4 chip per channel -->
