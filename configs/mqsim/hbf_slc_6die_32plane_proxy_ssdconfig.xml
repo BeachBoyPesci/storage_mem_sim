@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  HBF-like SLC read-performance proxy for MQSim.
+
+  Modeling goal
+  =============
+  Target approximately 12 M read IOPS / 200 GB/s with 16 KiB requests.
+  Capacity is intentionally not calibrated; the block geometry below is only
+  large enough to make the configuration practical to run.
+
+  Surrogate mapping
+  =================
+    1 MQSim channel                    ~= 1 HBF die and its shared wide I/O
+    1 one-die MQSim chip on channel    ~= 1 independently readable HBF plane
+    Plane_No_Per_Die = 1               avoids MQSim multi-plane semantics
+
+  The resulting execution topology is:
+    6 channels x 32 chips/channel x 1 die/chip x 1 plane/die
+    = 6 HBF-die proxies x 32 plane proxies
+    = 192 independent array execution slots
+
+  With an effective 16 KiB logical read unit and tR=15 us:
+    array IOPS = 192 / 15 us = 12.8 M IOPS
+    array BW   = 12.8 M x 16 KiB = 209.715 GB/s (decimal)
+
+  Native validation (32,768 aligned 16 KiB reads, all arriving at t=0):
+    completed IOPS = 12.3618 M
+    bandwidth      = 202.535 GB/s (decimal)
+  This is a saturated batch result under the current NVMe proxy path, not an
+  externally paced 12 M IOPS arrival process.
+
+  Important abstractions
+  ======================
+  * Page_Capacity=16 KiB is an effective HBF logical read unit.  The referenced
+    HBF patent describes this logical unit as two 8 KiB physical pages.  Stock
+    MQSim has no sub-plane dimension, so that relationship is collapsed here.
+  * Flash_Channel_Width=128 bytes is NOT a physical 1024-bit HBF pin-count
+    claim.  Stock MQSim issues a separate ~320 ns command/setup sequence for
+    every surrogate chip and cannot express a 4.8 GT/s sub-nanosecond channel.
+    The effective width prevents those modeling artifacts from throttling the
+    intended 15 us array bound.  Native MQSim still models shared data-out
+    contention among all 32 surrogate chips on each channel.
+  * The NVMe/PCIe host path is retained because the current Python adapter does
+    not expose MQSim DIRECT mode.  Its bandwidth is set above the media target
+    so it acts only as a non-bottleneck transport proxy.
+  * This is a read-performance proxy, not a physical HBF implementation and
+    not a calibrated write, endurance, power, or capacity model.
+-->
+<Execution_Parameter_Set>
+    <Host_Parameter_Set>
+        <!-- Artificial non-bottleneck transport: 4 x 64 GB/s = 256 GB/s. -->
+        <PCIe_Lane_Bandwidth>64.00000</PCIe_Lane_Bandwidth>
+        <PCIe_Lane_Count>4</PCIe_Lane_Count>
+        <SATA_Processing_Delay>400000</SATA_Processing_Delay>
+        <Enable_ResponseTime_Logging>false</Enable_ResponseTime_Logging>
+        <ResponseTime_Logging_Period_Length>1000000</ResponseTime_Logging_Period_Length>
+    </Host_Parameter_Set>
+    <Device_Parameter_Set>
+        <Seed>321</Seed>
+        <Enabled_Preconditioning>false</Enabled_Preconditioning>
+        <Memory_Type>FLASH</Memory_Type>
+        <HostInterface_Type>NVME</HostInterface_Type>
+        <IO_Queue_Depth>4096</IO_Queue_Depth>
+        <Queue_Fetch_Size>1024</Queue_Fetch_Size>
+
+        <!-- The workload template turns the data cache off for measured reads. -->
+        <Caching_Mechanism>ADVANCED</Caching_Mechanism>
+        <Data_Cache_Sharing_Mode>SHARED</Data_Cache_Sharing_Mode>
+        <Data_Cache_Capacity>67108864</Data_Cache_Capacity>
+        <Data_Cache_DRAM_Row_Size>8192</Data_Cache_DRAM_Row_Size>
+        <Data_Cache_DRAM_Data_Rate>100</Data_Cache_DRAM_Data_Rate>
+        <Data_Cache_DRAM_Data_Busrt_Size>1</Data_Cache_DRAM_Data_Busrt_Size>
+        <Data_Cache_DRAM_tRCD>13</Data_Cache_DRAM_tRCD>
+        <Data_Cache_DRAM_tCL>13</Data_Cache_DRAM_tCL>
+        <Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
+
+        <Address_Mapping>PAGE_LEVEL</Address_Mapping>
+        <!-- Isolate the NAND array/channel upper bound from mapping-table I/O. -->
+        <Ideal_Mapping_Table>true</Ideal_Mapping_Table>
+        <CMT_Capacity>2097152</CMT_Capacity>
+        <CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
+        <!-- Consecutive logical pages spread channel -> chip -> die -> plane. -->
+        <Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
+        <Transaction_Scheduling_Policy>PRIORITY_OUT_OF_ORDER</Transaction_Scheduling_Policy>
+
+        <Overprovisioning_Ratio>0.07</Overprovisioning_Ratio>
+        <GC_Exec_Threshold>0.05000</GC_Exec_Threshold>
+        <GC_Block_Selection_Policy>RGA</GC_Block_Selection_Policy>
+        <Use_Copyback_for_GC>false</Use_Copyback_for_GC>
+        <Preemptible_GC_Enabled>false</Preemptible_GC_Enabled>
+        <GC_Hard_Threshold>0.005000</GC_Hard_Threshold>
+        <Dynamic_Wearleveling_Enabled>true</Dynamic_Wearleveling_Enabled>
+        <Static_Wearleveling_Enabled>true</Static_Wearleveling_Enabled>
+        <Static_Wearleveling_Threshold>100</Static_Wearleveling_Threshold>
+        <Preferred_suspend_erase_time_for_read>700000</Preferred_suspend_erase_time_for_read>
+        <Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
+        <Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
+
+        <!-- Six HBF-die proxies, each with one shared effective wide I/O. -->
+        <Flash_Channel_Count>6</Flash_Channel_Count>
+        <Flash_Channel_Width>128</Flash_Channel_Width>
+        <!-- Maximum safe rate in MQSim's integer-nanosecond timing model. -->
+        <Channel_Transfer_Rate>1000</Channel_Transfer_Rate>
+        <!--
+          Stock MQSim's PRIORITY_OUT_OF_ORDER scheduler overlaps array work
+          across chips on a channel, but native validation showed that 32 dies
+          inside one chip remained serialized.  Use 32 one-die chips so each
+          HBF plane proxy is an independently schedulable array resource while
+          all 32 still share the HBF-die proxy channel.
+        -->
+        <Chip_No_Per_Channel>32</Chip_No_Per_Channel>
+        <Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
+
+        <Flash_Parameter_Set>
+            <Flash_Technology>SLC</Flash_Technology>
+            <CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
+
+            <!-- HBF Figure-5B-style effective SLC array read latency. -->
+            <Page_Read_Latency_LSB>15000</Page_Read_Latency_LSB>
+            <!-- Unused for SLC; kept equal for transparent diagnostics. -->
+            <Page_Read_Latency_CSB>15000</Page_Read_Latency_CSB>
+            <Page_Read_Latency_MSB>15000</Page_Read_Latency_MSB>
+
+            <!-- Read-target-independent SLC write/erase modeling assumptions. -->
+            <Page_Program_Latency_LSB>200000</Page_Program_Latency_LSB>
+            <Page_Program_Latency_CSB>200000</Page_Program_Latency_CSB>
+            <Page_Program_Latency_MSB>200000</Page_Program_Latency_MSB>
+            <Block_Erase_Latency>2000000</Block_Erase_Latency>
+            <Block_PE_Cycles_Limit>100000</Block_PE_Cycles_Limit>
+            <Suspend_Erase_Time>700000</Suspend_Erase_Time>
+            <Suspend_Program_Time>100000</Suspend_Program_Time>
+
+            <!-- One die in each of 32 surrogate chips represents one HBF plane. -->
+            <Die_No_Per_Chip>1</Die_No_Per_Chip>
+            <!-- Must remain one: do not add MQSim multi-plane semantics. -->
+            <Plane_No_Per_Die>1</Plane_No_Per_Die>
+
+            <!-- Operational geometry only; capacity is not a calibrated target. -->
+            <Block_No_Per_Plane>64</Block_No_Per_Plane>
+            <Page_No_Per_Block>256</Page_No_Per_Block>
+            <!-- Effective logical read unit, not the patent's physical page. -->
+            <Page_Capacity>16384</Page_Capacity>
+            <Page_Metadat_Capacity>0</Page_Metadat_Capacity>
+        </Flash_Parameter_Set>
+    </Device_Parameter_Set>
+</Execution_Parameter_Set>

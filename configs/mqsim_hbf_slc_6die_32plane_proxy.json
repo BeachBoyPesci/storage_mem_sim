@@ -1,0 +1,14 @@
+{
+    "mem_type": "SSD",
+    "media_config": {
+        "media_type": "mqsim",
+        "capacity": 40.0,
+        "ssd_config": "storage_mem_sim/configs/mqsim/hbf_slc_6die_32plane_proxy_ssdconfig.xml",
+        "workload_config": "storage_mem_sim/configs/mqsim/hbf_slc_6die_32plane_proxy_workload.xml",
+        "merge_contiguous": true,
+        "request_size": 16384,
+        "num_requests": 32768,
+        "dp": 1,
+        "instances": 1
+    }
+}

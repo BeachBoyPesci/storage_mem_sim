@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Resource assignment for hbf_slc_6die_32plane_proxy_ssdconfig.xml.
+
+  Channel 0..5 each represents one HBF die.
+  One-die MQSim chip 0..31 under each channel represents one HBF plane.
+  Die 0 / plane 0 are the only die and plane in every surrogate chip.
+-->
+<MQSim_IO_Scenarios>
+    <IO_Scenario>
+        <IO_Flow_Parameter_Set_Trace_Based>
+            <Priority_Class>URGENT</Priority_Class>
+            <!-- Measure NAND/FTL completion rather than cache acknowledgement. -->
+            <Device_Level_Data_Caching_Mode>TURNED_OFF</Device_Level_Data_Caching_Mode>
+            <Channel_IDs>0,1,2,3,4,5</Channel_IDs>
+            <Chip_IDs>0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31</Chip_IDs>
+            <Die_IDs>0</Die_IDs>
+            <Plane_IDs>0</Plane_IDs>
+            <Initial_Occupancy_Percentage>0</Initial_Occupancy_Percentage>
+            <!-- Replaced with the generated trace path by the Python wrapper. -->
+            <File_Path>traces/hbf_slc_16k_read.trace</File_Path>
+            <Percentage_To_Be_Executed>100</Percentage_To_Be_Executed>
+            <Relay_Count>1</Relay_Count>
+            <Time_Unit>NANOSECOND</Time_Unit>
+        </IO_Flow_Parameter_Set_Trace_Based>
+    </IO_Scenario>
+</MQSim_IO_Scenarios>
