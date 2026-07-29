@@ -172,8 +172,8 @@ class MQSimMediaSystem(BaseMediaSystem):
         elif result.bandwidth_bytes_per_sec > 0:
             total_time = total_bytes / result.bandwidth_bytes_per_sec
 
-        logger.info("MQSim: %.1f s total_time, %.2f GB/s, %.0f IOPS",
-                    total_time,
+        logger.info("MQSim: %.1f us total_time, %.2f GB/s, %.0f IOPS",
+                    total_time * 1e6,
                     result.bandwidth_bytes_per_sec / (1024**3),
                     result.total_iops)
 
