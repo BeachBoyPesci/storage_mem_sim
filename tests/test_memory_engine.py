@@ -11,8 +11,11 @@ from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
+from ..memory_pool import MemoryAccess
 from ..media import (
+    BaseMediaSystem,
     MediaConfig,
+    MediaMetrics,
     MediaSystemBackend,
 )
 
@@ -102,12 +105,43 @@ class TestMemoryEngineIssueRequest(unittest.TestCase):
         )
         self.assertEqual(metrics.memory_reqs_num, 3)  # Analytic: no decomposition
 
-    def test_issue_request_with_dp(self):
-        self.engine.mem_config.dp_size = 2
-        metrics = self.engine.issue_request(
+    def test_dp_size_gt1_deprecated_warns_and_ignored(self):
+        """dp_size > 1 warns and is ignored (no replication anymore)."""
+        with self.assertWarns(DeprecationWarning):
+            config = MemoryEngineConfig(
+                dp_size=2,
+                media_config=MediaConfig(
+                    media_type=MediaSystemBackend.ANALYTIC,
+                    capacity=1.0,
+                    bandwidth=100.0,
+                ),
+            )
+        engine = MemoryEngine(config)
+        metrics = engine.issue_request(
             [0], [64], [MemoryRequestType.KREAD]
         )
+        self.assertEqual(metrics.memory_reqs_num, 1)
+        self.assertEqual(metrics.global_memory_reqs_num, 1)
+
+    def test_storage_instance_num_gt1_deprecated_warns(self):
+        with self.assertWarns(DeprecationWarning):
+            MemoryEngineConfig(
+                storage_instance_num=2,
+                media_config=MediaConfig(
+                    media_type=MediaSystemBackend.ANALYTIC,
+                    capacity=1.0,
+                    bandwidth=100.0,
+                ),
+            )
+
+    def test_global_memory_reqs_num_equals_local(self):
+        """global_memory_reqs_num is always equal to memory_reqs_num."""
+        metrics = self.engine.issue_request(
+            [0, 64], [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KWRITE],
+        )
         self.assertEqual(metrics.memory_reqs_num, 2)
+        self.assertEqual(metrics.global_memory_reqs_num, 2)
 
     def test_engine_metrics_accumulation(self):
         self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
@@ -123,6 +157,67 @@ class TestMemoryEngineIssueRequest(unittest.TestCase):
         self.assertEqual(len(em.mem_metrics_list), 0)
 
 
+class _StubNonAnalyticMediaSystem(BaseMediaSystem):
+    """Stub backend with a non-Analytic type, without building Ramulator."""
+
+    def __init__(self):
+        super().__init__(MediaConfig(
+            media_type=MediaSystemBackend.RAMULATOR, bandwidth=100.0))
+
+    def handler_mem_request(self, mem_req_list):
+        return MediaMetrics()
+
+
+class TestMemoryEngineEventPort(unittest.TestCase):
+    """Test the event port: creation, mode latch, metric isolation."""
+
+    def setUp(self):
+        self.engine = MemoryEngine(MemoryEngineConfig(
+            memory_type=MemoryType.HBM,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=1.0,
+                bandwidth=100.0,
+            ),
+        ))
+
+    def _access(self, request_id="r1", size_bytes=64):
+        return MemoryAccess(
+            request_id=request_id,
+            source_id="s0",
+            addr=0,
+            size_bytes=size_bytes,
+            req_type=MemoryRequestType.KREAD,
+        )
+
+    def test_sync_then_event_raises(self):
+        """issue_request locks sync mode; event submit afterwards raises."""
+        self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
+        with self.assertRaises(RuntimeError):
+            self.engine.submit(self._access(), local_addr=0, now=0.0)
+
+    def test_event_then_sync_raises(self):
+        """Event submit locks event mode; issue_request afterwards raises."""
+        self.engine.submit(self._access(), local_addr=0, now=0.0)
+        with self.assertRaises(RuntimeError):
+            self.engine.issue_request(
+                [0], [64], [MemoryRequestType.KREAD]
+            )
+
+    def test_event_does_not_pollute_sync_metrics(self):
+        """Event activity leaves the sync accumulator untouched."""
+        peak = 100.0 * (1024 ** 3)
+        now = 64.0 / peak
+        entries = self.engine.submit(
+            self._access(size_bytes=64), local_addr=0, now=now)
+        # Sync metrics should be untouched.
+        em = self.engine.get_engine_metrics()
+        self.assertEqual(em.total_bytes, 0)
+        # Event submit returns prediction with metrics.
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0][2].size_bytes, 64)
+
+
 class TestMemoryEngineConfig(unittest.TestCase):
     """Test MemoryEngineConfig validation."""
 
@@ -131,6 +226,26 @@ class TestMemoryEngineConfig(unittest.TestCase):
         self.assertEqual(config.memory_type, MemoryType.HBM)
         self.assertEqual(config.dp_size, 1)
         self.assertEqual(config.storage_instance_num, 1)
+
+    def test_default_config_does_not_warn(self):
+        """Default values must not emit deprecation warnings."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            MemoryEngineConfig()
+
+    def test_single_instance_capacity_derivation(self):
+        """capacity is per-instance now (no division by dp/instances)."""
+        config = MemoryEngineConfig(
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=2.0,
+                bandwidth=100.0,
+            ),
+        )
+        self.assertEqual(config.total_capacity, 2 * 1024 ** 3)
+        self.assertEqual(config.per_dp_capacity, 2 * 1024 ** 3)
+        self.assertEqual(config.capacity, 2 * 1024 ** 3)
 
     def test_invalid_dp_size(self):
         with self.assertRaises(ValueError):

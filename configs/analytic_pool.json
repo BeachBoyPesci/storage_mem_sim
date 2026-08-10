@@ -1,0 +1,13 @@
+{
+    "mem_type": "HBM",
+    "media_config": {
+        "media_type": "analytic",
+        "capacity": 4.0,
+        "bandwidth": 400.0,
+        "transport_bandwidth": 100.0
+    },
+    "pool": {
+        "instances": 4,
+        "allocation_policy": "least_allocated"
+    }
+}

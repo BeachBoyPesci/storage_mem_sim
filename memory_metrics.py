@@ -18,8 +18,10 @@ class MemoryMetrics:
         memory_scale_factor: Scale factor applied for time conversion.
         memory_reqs_num: Number of engine-level requests in the simulated
                          storage instance.
-        global_memory_reqs_num: Total engine-level requests across all
-                                DP ranks and storage instances.
+        global_memory_reqs_num: Deprecated — always equal to
+                                memory_reqs_num since MemoryEngine became
+                                a single-instance model; retained for
+                                compatibility.
         iops: End-to-end device IOPS reported by MQSim, or None when the
               selected backend does not provide this metric.
         bandwidth: Bandwidth in bytes/second (from media backend).
@@ -45,8 +47,10 @@ class MemoryEngineMetrics:
                      storage instance.
         memory_reqs_num: Accumulated engine-level requests in the
                          simulated storage instance.
-        global_memory_reqs_num: Accumulated engine-level requests
-                                across all DP ranks and instances.
+        global_memory_reqs_num: Deprecated — always equal to
+                                memory_reqs_num since MemoryEngine became
+                                a single-instance model; retained for
+                                compatibility.
         mem_metrics_list: History of per-request MemoryMetrics.
         bandwidth: Cumulative bandwidth = total_bytes / total_time (B/s).
         iops: Time-weighted end-to-end MQSim device IOPS, or None for

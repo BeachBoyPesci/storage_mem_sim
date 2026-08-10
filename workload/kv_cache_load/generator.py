@@ -12,6 +12,7 @@ from .selector import KVTokenSelector
 
 if TYPE_CHECKING:
     from ...memory_engine import MemoryEngine
+    from ...memory_pool import MemoryPool
 
 
 def _ordered_unique_page_ids(
@@ -40,8 +41,12 @@ class GeneratedKVCacheLoad:
     touched_page_ids: List[int]
     stats: KVCacheLoadStats
 
-    def issue(self, engine: "MemoryEngine") -> MemoryMetrics:
-        """Submit this workload through the public MemoryEngine API."""
+    def issue(self, engine: "MemoryEngine | MemoryPool") -> MemoryMetrics:
+        """Submit this workload through the public issue_request API.
+
+        Accepts both a MemoryEngine (local addresses) and a MemoryPool
+        (global addresses); both expose ``issue_request(addr, size, type)``.
+        """
         return engine.issue_request(
             self.addresses,
             self.sizes,

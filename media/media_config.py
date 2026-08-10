@@ -35,11 +35,23 @@ class MediaConfig:
     io_frequency: float = 0.0
     granularity: int = 64
 
+    # Transport link bandwidth (Analytic only). 0.0 = not configured =
+    # no transport bottleneck; the effective peak is
+    # min(bandwidth, transport_bandwidth).
+    transport_bandwidth: float = 0.0
+
     # MQSim-specific
     ssd_config_path: str = ""
     workload_config_path: str = ""
     request_size_bytes: int = 131072
     merge_contiguous: bool = True
+
+    def __post_init__(self):
+        if self.transport_bandwidth < 0:
+            raise ValueError(
+                f"transport_bandwidth must be >= 0, got "
+                f"{self.transport_bandwidth}"
+            )
 
     @property
     def scale_factor(self) -> float:
