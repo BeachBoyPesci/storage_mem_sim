@@ -123,7 +123,7 @@ class MQSimMediaSystem(BaseMediaSystem):
         """Orchestrate: trace → workload → simulate → metrics."""
         num_read = sum(
             1 for mr in mem_req_list
-            if mr.memory_object.req_type == MemoryRequestType.KREAD)
+            if mr.req_type == MemoryRequestType.KREAD)
         num_write = len(mem_req_list) - num_read
 
         if not mem_req_list:

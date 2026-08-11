@@ -4,7 +4,8 @@ import heapq
 import logging
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from ..memory_pool import MemoryAccess, MemoryRequestMetrics
+from ..memory_request import MemoryRequest
+from ..memory_pool import MemoryRequestMetrics
 from ..memory_type import MemoryRequestType
 from .event import Event
 from .result import SimulationResult
@@ -48,17 +49,15 @@ class SimpleSimulator:
         pool = self._memory_pool
 
         def _on_arrival() -> None:
-            access = MemoryAccess(
+            request = MemoryRequest(
+                addr, size_bytes, req_type,
                 request_id=request_id,
                 source_id=source_id,
-                addr=addr,
-                size_bytes=size_bytes,
-                req_type=req_type,
                 mem_engine_id=engine_id,
                 is_finish=False,
             )
             self._refresh_finish_events(
-                pool.submit(access, now=time),
+                pool.submit(request, now=time),
             )
 
         self._push_event(Event(time=time, callback=_on_arrival,
@@ -85,7 +84,7 @@ class SimpleSimulator:
                 s: {
                     "avg_latency": sum(m.latency for m in ms) / len(ms),
                     "avg_contention_delay": sum(m.contention_delay for m in ms) / len(ms),
-                    "total_bytes": sum(m.size_bytes for m in ms),
+                    "total_bytes": sum(m.size for m in ms),
                     "count": len(ms),
                 }
                 for s, ms in per_source.items()
@@ -123,17 +122,15 @@ class SimpleSimulator:
             def _on_finish() -> None:
                 if metrics is not None:
                     self._request_metrics.append(metrics)
-                access = MemoryAccess(
+                request = MemoryRequest(
+                    0, metrics.size, MemoryRequestType.KREAD,
                     request_id=request_id,
                     source_id=metrics.source_id,
-                    addr=0,
-                    size_bytes=metrics.size_bytes,
-                    req_type=MemoryRequestType.KREAD,
                     mem_engine_id=metrics.mem_engine_id,
                     is_finish=True,
                 )
                 self._refresh_finish_events(
-                    pool.submit(access, now=finish_time),
+                    pool.submit(request, now=finish_time),
                 )
 
             self._push_event(Event(

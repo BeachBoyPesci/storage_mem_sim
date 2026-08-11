@@ -2,7 +2,7 @@
 
 import pytest
 
-from ..memory_pool import MemoryAccess, MemoryPool
+from ..memory_pool import MemoryPool
 from ..des import SimpleSimulator
 from .test_memory_pool import _engine_config
 
@@ -81,7 +81,7 @@ class TestSimpleSimulator:
             assert m.latency >= m.standalone_time
             assert m.contention_delay >= -1e-12  # floating tolerance
             assert m.average_bandwidth == pytest.approx(
-                m.size_bytes / m.latency
+                m.size / m.latency
             )
 
     def test_staggered_arrivals_contention_delay_nonzero(self):

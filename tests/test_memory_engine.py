@@ -7,11 +7,9 @@ import tempfile
 
 from ..memory_type import MemoryType, MemoryRequestType
 from ..memory_config import MemoryEngineConfig
-from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
-from ..memory_pool import MemoryAccess
 from ..media import (
     BaseMediaSystem,
     MediaConfig,
@@ -182,13 +180,8 @@ class TestMemoryEngineEventPort(unittest.TestCase):
         ))
 
     def _access(self, request_id="r1", size_bytes=64):
-        return MemoryAccess(
-            request_id=request_id,
-            source_id="s0",
-            addr=0,
-            size_bytes=size_bytes,
-            req_type=MemoryRequestType.KREAD,
-        )
+        return MemoryRequest(0, size_bytes, MemoryRequestType.KREAD,
+                             request_id=request_id, source_id="s0")
 
     def test_sync_then_event_no_error(self):
         """Sync and event paths can interleave without error."""
@@ -211,7 +204,7 @@ class TestMemoryEngineEventPort(unittest.TestCase):
         self.assertEqual(em.total_bytes, 0)
         # Event submit returns prediction with metrics.
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0][2].size_bytes, 64)
+        self.assertEqual(entries[0][2].size, 64)
 
 
 class TestMemoryEngineConfig(unittest.TestCase):

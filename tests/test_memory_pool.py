@@ -9,18 +9,17 @@ from ..media import (
     MediaConfig,
     MediaSystemBackend,
 )
-from ..memory_pool import MemoryAccess, MemoryPool, MemoryPoolConfig
+from ..memory_request import MemoryRequest
+from ..memory_pool import MemoryPool, MemoryPoolConfig
 
 _GIB = 1024 ** 3
 
 
 def _access(request_id, addr, size_bytes, source_id="s0"):
-    return MemoryAccess(
+    return MemoryRequest(
+        addr, size_bytes, MemoryRequestType.KREAD,
         request_id=request_id,
         source_id=source_id,
-        addr=addr,
-        size_bytes=size_bytes,
-        req_type=MemoryRequestType.KREAD,
     )
 
 
@@ -130,7 +129,7 @@ class TestPoolSubmitRouting:
         assert len(entries) == 1
         rid, ft, m = entries[0]
         assert rid == "r1"
-        assert m.size_bytes == 1000
+        assert m.size == 1000
 
     def test_engine_scope_instances_independent(self):
         """ENGINE scope: requests on different engines never contend."""

@@ -29,7 +29,6 @@ except ImportError:
 
 from ..memory_type import MemoryType, MemoryRequestType
 from ..memory_config import MemoryEngineConfig
-from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
@@ -161,7 +160,7 @@ MemorySystem:
         # Our wrapper
         mem_cfg = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
         reqs = [
-            MemoryRequest(memory_object=MemoryObject(a, g, MemoryRequestType.KREAD, mem_cfg))
+            MemoryRequest(a, g, MemoryRequestType.KREAD, config=mem_cfg)
             for a in addrs
         ]
         wrapper_metrics = wrapper.handler_mem_request(reqs)
@@ -193,7 +192,7 @@ MemorySystem:
         mem_cfg = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
         types = [MemoryRequestType.KREAD] * 4 + [MemoryRequestType.KWRITE] * 4
         reqs = [
-            MemoryRequest(memory_object=MemoryObject(a, g, t, mem_cfg))
+            MemoryRequest(a, g, t, config=mem_cfg)
             for a, t in zip(addrs, types)
         ]
         wrapper_metrics = wrapper.handler_mem_request(reqs)
@@ -230,7 +229,7 @@ MemorySystem:
 
             mem_cfg = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
             reqs = [
-                MemoryRequest(memory_object=MemoryObject(a, g, MemoryRequestType.KREAD, mem_cfg))
+                MemoryRequest(a, g, MemoryRequestType.KREAD, config=mem_cfg)
                 for a in addrs
             ]
             wrapper_metrics = wrapper.handler_mem_request(reqs)
@@ -294,7 +293,7 @@ MemorySystem:
 
         mem_cfg = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
         reqs = [
-            MemoryRequest(memory_object=MemoryObject(a, g, MemoryRequestType.KREAD, mem_cfg))
+            MemoryRequest(a, g, MemoryRequestType.KREAD, config=mem_cfg)
             for a in addrs
         ]
         wrapper_metrics = wrapper.handler_mem_request(reqs)
@@ -323,7 +322,7 @@ MemorySystem:
 
         mem_cfg = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
         reqs = [
-            MemoryRequest(memory_object=MemoryObject(a, g, MemoryRequestType.KREAD, mem_cfg))
+            MemoryRequest(a, g, MemoryRequestType.KREAD, config=mem_cfg)
             for a in addrs
         ]
         wrapper_metrics = wrapper.handler_mem_request(reqs)

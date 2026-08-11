@@ -10,7 +10,6 @@ import os
 
 from ..memory_type import MemoryType, MemoryRequestType
 from ..memory_config import MemoryEngineConfig
-from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
@@ -54,8 +53,7 @@ class TestRamulatorMediaSystemDecomposition(unittest.TestCase):
         self.g = self.system._tx_bytes
 
     def _make_memory_request(self, addr, size, req_type):
-        obj = MemoryObject(addr, size, req_type, self.mem_config)
-        return MemoryRequest(memory_object=obj)
+        return MemoryRequest(addr, size, req_type, config=self.mem_config)
 
     def test_create_media_requests_single(self):
         req = self._make_memory_request(0, self.g * 2, MemoryRequestType.KREAD)
@@ -92,8 +90,7 @@ class TestRamulatorMediaSystemTraceFormat(unittest.TestCase):
         self.mem_config = MemoryEngineConfig()
 
     def _make_memory_request(self, addr, size, req_type):
-        obj = MemoryObject(addr, size, req_type, self.mem_config)
-        return MemoryRequest(memory_object=obj)
+        return MemoryRequest(addr, size, req_type, config=self.mem_config)
 
     def test_trace_format_load_store(self):
         import tempfile
@@ -124,8 +121,7 @@ class TestRamulatorMediaSystemFull(unittest.TestCase):
         self.mem_config = MemoryEngineConfig()
 
     def _make_memory_request(self, addr, size, req_type):
-        obj = MemoryObject(addr, size, req_type, self.mem_config)
-        return MemoryRequest(memory_object=obj)
+        return MemoryRequest(addr, size, req_type, config=self.mem_config)
 
     def test_handler_mem_request_empty(self):
         metrics = self.system.handler_mem_request([])
@@ -243,11 +239,10 @@ MemorySystem:
             os.unlink(tmp.name)
 
     def _make_request(self, addr, size, req_type):
-        from ..memory_object import MemoryObject
+        from ..memory_request import MemoryRequest
         from ..memory_request import MemoryRequest
         from ..memory_config import MemoryEngineConfig
-        obj = MemoryObject(addr, size, req_type, MemoryEngineConfig())
-        return MemoryRequest(memory_object=obj)
+        return MemoryRequest(addr, size, req_type, config=MemoryEngineConfig())
 
 
 class TestCreateComponentParams(unittest.TestCase):
@@ -368,7 +363,7 @@ MemorySystem:
             from ..media.media_config import MediaConfig
             from ..media.media_backend import MediaSystemBackend
             from ..media.ramulator_media_system import RamulatorMediaSystem
-            from ..memory_object import MemoryObject
+            from ..memory_request import MemoryRequest
             from ..memory_request import MemoryRequest
             from ..memory_config import MemoryEngineConfig
 
@@ -378,8 +373,7 @@ MemorySystem:
             )
             sys_ = RamulatorMediaSystem(config)
             mem_config = MemoryEngineConfig()
-            obj = MemoryObject(0, sys_._tx_bytes, MemoryRequestType.KREAD, mem_config)
-            req = MemoryRequest(memory_object=obj)
+            req = MemoryRequest(0, sys_._tx_bytes, MemoryRequestType.KREAD, config=mem_config)
 
             with self.assertRaises(ValueError) as ctx:
                 sys_.handler_mem_request([req])

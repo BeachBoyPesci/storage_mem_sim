@@ -10,7 +10,6 @@ import os
 
 from ..memory_type import MemoryType, MemoryRequestType
 from ..memory_config import MemoryEngineConfig
-from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics

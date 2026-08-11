@@ -16,13 +16,28 @@ from typing import Dict, List, Tuple
 
 from .memory_type import MemoryRequestType
 from .memory_config import MemoryEngineConfig
-from .memory_object import MemoryObject
 from .memory_request import MemoryRequest
 from .memory_metrics import MemoryMetrics, MemoryEngineMetrics
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_COMPLETION_EPSILON_BYTES = 1e-6
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class _ActiveRequest:
+    """Mutable state of one in-flight request in the engine."""
+
+    request_id: str
+    source_id: str
+    mem_engine_id: int
+    arrival_time: float
+    remaining_bytes: float
+    size_bytes: int
+    allocated_bandwidth: float = 0.0
 
 
 class MemoryEngine:
@@ -52,7 +67,7 @@ class MemoryEngine:
         self.instance_id: int = 0
         self.global_base: int = 0
         # Event-driven state.
-        self._active_requests: Dict[str, "ActiveMemoryRequest"] = {}
+        self._active_requests: Dict[str, "_ActiveRequest"] = {}
         self._last_update_time: float = 0.0
 
         if mem_config.media_config is None:
@@ -120,18 +135,6 @@ class MemoryEngine:
     # Sync batch path
     # ------------------------------------------------------------------
 
-    def create_request(
-        self, addr: int, size: int, req_type: MemoryRequestType,
-    ) -> MemoryRequest:
-        """Wrap *addr*, *size*, *req_type* into a MemoryRequest.
-
-        Constructs a MemoryObject then wraps it.  The object's
-        ``media_req_num`` is an estimate based on engine granularity;
-        the true count comes from the backend.
-        """
-        memory_object = MemoryObject(addr, size, req_type, self.mem_config)
-        return MemoryRequest(memory_object=memory_object)
-
     # TODO: issue_request will be deprecated or substantially reworked
     # in a future phase — the sync batch path overlaps with the event
     # path conceptually and should be unified.
@@ -160,11 +163,11 @@ class MemoryEngine:
         if n == 0:
             return MemoryMetrics()
         mem_reqs = [
-            self.create_request(addr[i], size[i], req_type[i])
+            MemoryRequest(addr[i], size[i], req_type[i], config=self.mem_config)
             for i in range(n)
         ]
         total_media_metrics = self.media_system.handler_mem_request(mem_reqs)
-        simulated_bytes = sum(req.memory_object.size for req in mem_reqs)
+        simulated_bytes = sum(req.size for req in mem_reqs)
         mem_metrics = MemoryMetrics(
             cycles=total_media_metrics.cycles,
             total_time=total_media_metrics.time,
@@ -192,37 +195,37 @@ class MemoryEngine:
 
     def submit(
         self,
-        access: "MemoryAccess",
+        request: "MemoryRequest",
         local_addr: int,
         now: float,
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
         """Submit one access; return earliest-finishing predictions.
 
-        If *access.is_finish* is True, this is a FINISH callback:
+        If *request.is_finish* is True, this is a FINISH callback:
         the completed request is removed and bandwidth is reallocated.
         Otherwise it is an ARRIVAL: a new request is added.
         """
         self._advance(now)
         self._pop_finished()
 
-        if access.is_finish:
+        if request.is_finish:
             # Only the earliest-finishing request(s) hold a FINISH event.
             # A sibling callback (same time) may have already popped this
             # request via _pop_finished — that is expected and harmless.
-            if access.request_id in self._active_requests:
-                self._active_requests.pop(access.request_id)
+            if request.request_id in self._active_requests:
+                self._active_requests.pop(request.request_id)
         else:
-            if access.request_id in self._active_requests:
+            if request.request_id in self._active_requests:
                 raise ValueError(
-                    f"request_id {access.request_id!r} is already active"
+                    f"request_id {request.request_id!r} is already active"
                 )
-            from .memory_pool.memory_access import ActiveMemoryRequest
-            self._active_requests[access.request_id] = ActiveMemoryRequest(
-                access=access,
-                local_addr=local_addr,
-                mem_engine_id=self.instance_id,
+            self._active_requests[request.request_id] = _ActiveRequest(
+                request_id=request.request_id,
+                source_id=request.source_id,
+                mem_engine_id=request.mem_engine_id or self.instance_id,
                 arrival_time=now,
-                remaining_bytes=float(access.size_bytes),
+                remaining_bytes=float(request.size),
+                size_bytes=request.size,
             )
 
         self._reallocate()
@@ -291,26 +294,26 @@ class MemoryEngine:
         self, predictions: List[Tuple[str, float]],
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
         """Wrap ``[(rid, ft), ...]`` with MemoryRequestMetrics."""
-        from .memory_pool.memory_access import MemoryRequestMetrics
+        from .memory_pool.request_metrics import MemoryRequestMetrics
 
         effective_bw = self.media_system._bandwidth_bytes_per_sec
         result: List[Tuple[str, float, MemoryRequestMetrics]] = []
         for rid, ft in predictions:
             req = self._active_requests[rid]
             latency = ft - req.arrival_time
-            standalone = req.access.size_bytes / effective_bw if effective_bw > 0 else float("inf")
+            standalone = req.size_bytes / effective_bw if effective_bw > 0 else float("inf")
             m = MemoryRequestMetrics(
                 request_id=rid,
-                source_id=req.access.source_id,
+                source_id=req.source_id,
                 mem_engine_id=req.mem_engine_id,
                 arrival_time=req.arrival_time,
                 finish_time=ft,
-                size_bytes=req.access.size_bytes,
+                size=req.size_bytes,
                 latency=latency,
                 standalone_time=standalone,
                 contention_delay=latency - standalone,
                 average_bandwidth=(
-                    req.access.size_bytes / latency if latency > 0 else 0.0
+                    req.size_bytes / latency if latency > 0 else 0.0
                 ),
             )
             result.append((rid, ft, m))

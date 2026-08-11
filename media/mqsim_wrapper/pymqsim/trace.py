@@ -297,13 +297,13 @@ def merge_sequential(
 
     merged_addr, merged_size, merged_type = [], [], []
 
-    first = mem_req_list[0].memory_object
+    first = mem_req_list[0]
     cur_addr = first.addr
     cur_size = first.size
     cur_type = 1 if first.req_type == MemoryRequestType.KREAD else 0
 
     for req in mem_req_list[1:]:
-        obj = req.memory_object
+        obj = req
         mqsim_type = 1 if obj.req_type == MemoryRequestType.KREAD else 0
         if mqsim_type == cur_type and obj.addr == cur_addr + cur_size:
             cur_size += obj.size
@@ -343,8 +343,8 @@ def build_trace_lines(
         chunks = list(zip(*merge_sequential(mem_req_list)))
     else:
         chunks = [
-            (mr.memory_object.addr, mr.memory_object.size,
-             1 if mr.memory_object.req_type == MemoryRequestType.KREAD else 0)
+            (mr.addr, mr.size,
+             1 if mr.req_type == MemoryRequestType.KREAD else 0)
             for mr in mem_req_list
         ]
 

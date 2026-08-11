@@ -6,7 +6,6 @@ import os
 
 from ..memory_type import MemoryType, MemoryRequestType
 from ..memory_config import MemoryEngineConfig
-from ..memory_object import MemoryObject
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
@@ -31,8 +30,7 @@ class TestAnalyticMediaSystem(unittest.TestCase):
 
     def _make_memory_request(self, addr, size, req_type):
         """Helper: create a MemoryRequest for testing."""
-        obj = MemoryObject(addr, size, req_type, self.mem_config)
-        return MemoryRequest(memory_object=obj)
+        return MemoryRequest(addr, size, req_type, config=self.mem_config)
 
     def test_single_read(self):
         """Single read request produces valid metrics."""

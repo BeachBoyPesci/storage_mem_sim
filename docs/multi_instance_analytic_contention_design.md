@@ -17,7 +17,7 @@
 
 - Ramulator/MQSim 的跨调用竞争或在线增量仿真。
 - 一个 tensor 跨多个实例进行 stripe 放置。
-- 数据复制、迁移、remote access 或缓存一致性。
+- 数据复制、迁移、remote request 或缓存一致性。
 - PCIe switch、网络、计算单元等多级共享资源的精确流水和仲裁；第一阶段只允许将瓶颈折叠为 Engine 或 Pool 的一个带宽资源。
 - 在本仓库内实现完整的全局离散事件循环。
 
@@ -26,7 +26,7 @@
 ### 2.1 层级划分
 
 - `MemoryEngine`：单个物理介质实例，持有带宽竞争状态（`active_requests`、`last_update_time`、均分带宽）。预测采用**静态公式**（`now + remaining / allocated_bw`），精确度由 FINISH 回调修正。不维护预测缓存或事件指标。
-- `MemoryPool`：多实例地址和路由管理层。`submit(access, now)` 统一入口，`access.is_finish` 区分 ARRIVAL/FINISH。不 import `Event`（Event 是 Simulator 层概念）。
+- `MemoryPool`：多实例地址和路由管理层。`submit(request, now)` 统一入口，`request.is_finish` 区分 ARRIVAL/FINISH。不 import `Event`（Event 是 Simulator 层概念）。
 - `SimpleSimulator`：事件堆管理 + 最终统计。ARRIVAL 和 FINISH 都走 `pool.submit()`，闭包回调。**只有最早完成的请求持有 FINISH 事件**。
 
 ### 2.2 从 MemoryEngine 移出的职责
@@ -68,7 +68,7 @@ flowchart TB
     end
 
     subgraph POOL_LAYER["MemoryPool：多实例系统层"]
-        API["submit(access, now) / get_tensor_addr"]
+        API["submit(request, now) / get_tensor_addr"]
         ADDR["Global Address Windows<br/>Allocation Policy"]
         ROUTER["Global -> Engine ID + Local Address"]
         API --> ADDR
@@ -108,7 +108,7 @@ flowchart TB
 | 模块 | 核心职责 | 不负责的内容 |
 | --- | --- | --- |
 | `MemoryEngine` | 单实例 local 地址分配、容量校验、backend 生命周期；持有带宽竞争状态（`_advance`、`_pop_finished`、`_reallocate`、`_predict_earliest`、`_build_results`） | 多实例数量、跨实例路由、DP 复制、事件队列、最终统计 |
-| `MemoryPool` | 实例集合、global 地址窗口、global→local 转换、`submit(access, now)` 统一入口（`access.is_finish` 分支）；不做统计 | DRAM/NAND 细节、引擎内部带宽状态、事件队列管理、Event |
+| `MemoryPool` | 实例集合、global 地址窗口、global→local 转换、`submit(request, now)` 统一入口（`request.is_finish` 分支）；不做统计 | DRAM/NAND 细节、引擎内部带宽状态、事件队列管理、Event |
 | `SimpleSimulator` | 管理事件堆（Event 带 callback）；`schedule_arrival` 用闭包构造回调；`run()` 直接 `event.callback()`；聚合 makespan 和 per-source 指标 | 地址映射、介质请求转换、engine 身份 |
 | `des/event.py` | `Event`：`time` + `callback` + `request_id` + `metrics`；无 `EventKind` | — |
 
@@ -201,32 +201,34 @@ TODO(phase-2): 如果目标硬件共享传输链路，需引入 POOL scope（共
 
 ## 6. 核心数据结构和接口
 
-### 6.1 MemoryAccess
+### 6.1 MemoryRequest — 统一请求类型
 
-父项目提交给 MemoryPool 的逻辑访问。同时表示 ARRIVAL 和 FINISH：
+事件路径和同步路径共用 `MemoryRequest`。取代了旧的 `MemoryRequest` 和 `MemoryObject`：
 
 ```python
-@dataclass(frozen=True)
-class MemoryAccess:
-    request_id: str
-    source_id: str
-    addr: int
-    size_bytes: int
-    req_type: MemoryRequestType
+@dataclass
+class MemoryRequest:
+    addr: int                       # 地址
+    size: int                       # 字节数（属性 size_bytes 为别名）
+    req_type: MemoryRequestType     # 读写类型
+    media_req_num: int = 0          # 按 granularity 分解的估计数量
+    media_request_list = []         # 分解后的介质请求（由 backend 填充）
+
+    # 事件路径字段
+    request_id: str = ""
+    source_id: str = ""
     mem_engine_id: int | None = None
     is_finish: bool = False
-    # TODO(phase-2): add weight field for weighted bandwidth sharing
+
+    # 构造：config 参数计算 media_req_num，省略则默认为 0
+    def __init__(self, addr, size, req_type, *, config=None, ...)
 ```
 
-字段语义：
+- ARRIVAL 时 Simulator 构造 `MemoryRequest`（填充事件路径字段）
+- FINISH 时从 metrics 构造 `MemoryRequest(is_finish=True)`
+- sync 路径 `issue_request` 直接构造，不填事件字段
 
-- `request_id`：唯一标识。ARRIVAL 时父项目分配，FINISH 时复用 metrics 中的 rid。
-- `source_id`：访问来源。
-- `addr`：Pool API 中始终是 global byte address。FINISH 时可填 0。
-- `is_finish`：False = ARRIVAL（添加请求），True = FINISH（移除请求 + 重分配）。
-- `mem_engine_id`：可选的实例约束；未指定时按地址解析。
-
-arrival time 不放入 `MemoryAccess`，由 `submit(now=...)` 参数表达。
+`MemoryRequest` 和 `MemoryObject` 已删除。
 
 ### 6.2 MemoryRequestMetrics
 
@@ -275,8 +277,8 @@ Simulator 在 `schedule_arrival` 和 `_handle_finish` 中通过闭包构造正�
 ```python
 def schedule_arrival(...):
     def _on_arrival():
-        access = MemoryAccess(...)
-        entries = self._pool.submit(access, now=time)
+        request = MemoryRequest(...)
+        entries = self._pool.submit(request, now=time)
         self._refresh_finish_events(entries)
     ev = Event(time=time, callback=_on_arrival, request_id=request_id, ...)
     heapq.heappush(...)
@@ -285,8 +287,8 @@ def _refresh_finish_events(self, entries):
     for rid, ft, metrics in entries:
         def _on_finish():
             self._request_metrics.append(metrics)
-            access = MemoryAccess(..., is_finish=True, ...)
-            updated = self._pool.submit(access, now=ft)
+            request = MemoryRequest(..., is_finish=True, ...)
+            updated = self._pool.submit(request, now=ft)
             self._refresh_finish_events(updated)
         ev = Event(time=ft, callback=_on_finish, request_id=rid, metrics=metrics)
         heapq.heappush(...)
@@ -302,17 +304,17 @@ while self._heap:
 
 ### 6.4 统一 submit，最早完成者先行
 
-Simulator 对 ARRIVAL 和 FINISH 走同一个 `pool.submit(access, now)`。Engine 根据 `access.is_finish` 区分：
+Simulator 对 ARRIVAL 和 FINISH 走同一个 `pool.submit(request, now)`。Engine 根据 `request.is_finish` 区分：
 
 ```
 ARRIVAL:
-  Simulator: Event → MemoryAccess(is_finish=False)
-  pool.submit(access, now) → engine: advance, add, reallocate, _predict_earliest
+  Simulator: Event → MemoryRequest(is_finish=False)
+  pool.submit(request, now) → engine: advance, add, reallocate, _predict_earliest
     → return [(earliest_rid, ft, metrics), ...]
 
 FINISH:
-  Simulator: 从 event.metrics 构造 MemoryAccess(is_finish=True, rid, eng_id, size)
-  pool.submit(access, now) → engine: advance, pop, reallocate, _predict_earliest
+  Simulator: 从 event.metrics 构造 MemoryRequest(is_finish=True, rid, eng_id, size)
+  pool.submit(request, now) → engine: advance, pop, reallocate, _predict_earliest
     → return [(next_earliest, ft, metrics), ...]
 ```
 
@@ -322,7 +324,7 @@ FINISH:
 
 ```python
 def submit(
-    self, access: MemoryAccess, *, now: float,
+    self, request: MemoryRequest, *, now: float,
 ) -> list[tuple[str, float, MemoryRequestMetrics]]:
     """统一入口：is_finish=False 为 ARRIVAL，True 为 FINISH 回调。"""
 
@@ -347,7 +349,7 @@ Engin 直接在实例上维护带宽竞争状态，不设独立的事件队列�
 
 ```python
 class MemoryEngine:
-    _active_requests: dict[str, ActiveMemoryRequest]
+    _active_requests: dict[str, _ActiveRequest]
     _last_update_time: float
     _runtime_mode: str | None
 ```
@@ -356,10 +358,10 @@ class MemoryEngine:
 
 ### 7.3 动态带宽推进
 
-**`submit(access, local_addr, now)`** — 统一切入口：
+**`submit(request, local_addr, now)`** — 统一切入口：
 
 1. `_advance(now)` + `_pop_finished()`
-2. 若 `access.is_finish`：pop 指定 rid
+2. 若 `request.is_finish`：pop 指定 rid
   否则：校验 rid 不重复，创建 `ActiveMemoryRequest` 加入 `_active_requests`
 3. `_reallocate()` — 均分带宽
 4. `_predict_earliest(now)` — 静态预测，筛选 `ft == min(ft)` 的最早者返回
@@ -370,7 +372,7 @@ class MemoryEngine:
 
 第一阶段固定均分：`share = peak / n`，直接写在 engine 的 reallocate 逻辑中。
 
-TODO(phase-2): 加权分配、source-fair 分配（需在 `MemoryAccess` 中增加 `weight` 字段）。
+TODO(phase-2): 加权分配、source-fair 分配（需在 `MemoryRequest` 中增加 `weight` 字段）。
 
 ### 7.5 理论不变量
 
@@ -413,7 +415,7 @@ sequenceDiagram
 
     Note over SIM: 事件循环 pop ARRIVAL(A, t0)
 
-    SIM->>SIM: Event → MemoryAccess(A, is_finish=False)
+    SIM->>SIM: Event → MemoryRequest(A, is_finish=False)
     SIM->>Pool: submit(A, now=t0)
     Pool->>Pool: resolve engine, global→local addr
     Pool->>Eng: submit(A, local_addr, now=t0)
@@ -425,7 +427,7 @@ sequenceDiagram
 
     Note over SIM: ... pop ARRIVAL(B, t1) ...
 
-    SIM->>SIM: Event → MemoryAccess(B, is_finish=False)
+    SIM->>SIM: Event → MemoryRequest(B, is_finish=False)
     SIM->>Pool: submit(B, now=t1)
     Pool->>Eng: submit(B, local_addr, now=t1)
     Eng->>Eng: _advance (A rem-=bw·Δt)<br/>add B, _reallocate (各50%)<br/>_predict_earliest → A
@@ -436,7 +438,7 @@ sequenceDiagram
 
     Note over SIM: ... pop FINISH(A) ...
 
-    SIM->>SIM: metrics → MemoryAccess(A, is_finish=True)
+    SIM->>SIM: metrics → MemoryRequest(A, is_finish=True)
     SIM->>Pool: submit(A, now=ft_A')
     Pool->>Eng: submit(A, local_addr, now=ft_A')
     Eng->>Eng: _advance, _collect, pop A<br/>_reallocate (B:100%)<br/>_predict_earliest → B
@@ -447,8 +449,8 @@ sequenceDiagram
 ```
 
 **三层隔离**：
-- **SimpleSimulator**：管理事件堆。Event 带 callback 闭包，`run()` 直接 `event.callback()`。ARRIVAL 和 FINISH 都调 `pool.submit(access, now)`。
-- **Pool**：`submit(access, now)` 统一入口，`is_finish` 分支。不做统计。
+- **SimpleSimulator**：管理事件堆。Event 带 callback 闭包，`run()` 直接 `event.callback()`。ARRIVAL 和 FINISH 都调 `pool.submit(request, now)`。
+- **Pool**：`submit(request, now)` 统一入口，`is_finish` 分支。不做统计。
 - **Engine**：`submit()` 统一入口：`_advance` → `_pop_finished` → 分支(add/pop) → `_reallocate` → `_predict_earliest` → `_build_results`。
 
 **关键设计点**：
@@ -480,7 +482,7 @@ class SimpleSimulator:
         self._request_metrics: list[MemoryRequestMetrics] = []
 
     def _handle_arrival(self, event):
-        access = MemoryAccess(
+        request = MemoryRequest(
             request_id=event.request_id,
             source_id=event.source_id,
             addr=event.addr,
@@ -489,13 +491,13 @@ class SimpleSimulator:
             mem_engine_id=event.mem_engine_id,
             is_finish=False,
         )
-        entries = self._pool.submit(access, now=event.time)
+        entries = self._pool.submit(request, now=event.time)
         self._refresh_finish_events(entries)
 
     def _handle_finish(self, event):
         if event.metrics is not None:
             self._request_metrics.append(event.metrics)
-        access = MemoryAccess(
+        request = MemoryRequest(
             request_id=event.request_id,
             source_id=event.metrics.source_id,
             addr=0,
@@ -504,7 +506,7 @@ class SimpleSimulator:
             mem_engine_id=event.metrics.mem_engine_id,
             is_finish=True,
         )
-        entries = self._pool.submit(access, now=event.time)
+        entries = self._pool.submit(request, now=event.time)
         self._refresh_finish_events(entries)
 
     def _refresh_finish_events(self, entries):
@@ -529,10 +531,10 @@ class SimpleSimulator:
 
 ### 8.5 Engine 内部状态管理
 
-**`submit(access, local_addr, now=t)`** — 统一入口：
+**`submit(request, local_addr, now=t)`** — 统一入口：
 
 1. `_advance(t)` + `_pop_finished()`
-2. 若 `access.is_finish`：pop 指定 rid（可能在 ① 中已被兄弟回调清理）
+2. 若 `request.is_finish`：pop 指定 rid（可能在 ① 中已被兄弟回调清理）
   否则：创建 `ActiveMemoryRequest` 加入 `_active_requests`
 3. `_reallocate()` — 均分（ARRIVAL）或释放（FINISH）
 4. `_predict_earliest(now)` — 返回 `[(rid, ft), ...]`（最早完成者）
@@ -580,7 +582,7 @@ Pool 和 Engine 都不维护事件路径的累计计数器（`MemoryPoolMetrics`
 - 地址空间改为单实例 local address。
 - 保留 `get_tensor_addr()`、`issue_request()`（同步路径）和 `media_system`。
 - 增加 `instance_id`、`global_base` 等由 Pool 注入的实例元数据。
-- 事件驱动状态：`submit(access, local_addr, now)` 统一入口，根据 `access.is_finish` 分支（ARRIVAL: add + reallocate；FINISH: pop + reallocate）。`_predict_earliest` 筛选最早完成者。
+- 事件驱动状态：`submit(request, local_addr, now)` 统一入口，根据 `request.is_finish` 分支（ARRIVAL: add + reallocate；FINISH: pop + reallocate）。`_predict_earliest` 筛选最早完成者。
 
 ### 11.2 `memory_config.py`
 
@@ -601,15 +603,13 @@ Pool 和 Engine 都不维护事件路径的累计计数器（`MemoryPoolMetrics`
 
 包含：
 
-- `MemoryPool`：constructor 直接接收 `instance_count + engine_config`（仅同构）。`get_tensor_addr()` 从 RR 位置扫描，选第一个容量足够的。`submit(access, now)` 统一入口（校验→resolve→forward）。
+- `MemoryPool`：constructor 直接接收 `instance_count + engine_config`（仅同构）。`get_tensor_addr()` 从 RR 位置扫描，选第一个容量足够的。`submit(request, now)` 统一入口（校验→resolve→forward）。
 - `AllocationPolicy` 枚举已删除；ROUND_ROBIN 硬编码，留 TODO。
 
 ### 11.4 新增数据契约
 
-`memory_pool/memory_access.py`：
+`memory_pool/request_metrics.py`：
 
-- `MemoryAccess`：逻辑访问数据契约，由 Pool 从 Event 构造。
-- `ActiveMemoryRequest`：Engine 内部的可变状态（remaining_bytes、allocated_bandwidth）。
 - `MemoryRequestMetrics`：单个完成请求的指标，在预测时预计算。
 
 `des/event.py`：
@@ -623,7 +623,7 @@ Pool 和 Engine 都不维护事件路径的累计计数器（`MemoryPoolMetrics`
 ### 11.7 `memory_metrics.py`
 
 - `MemoryEngineMetrics` 单实例累计口径（同步路径）。
-- `MemoryRequestMetrics` 在 `memory_pool/memory_access.py` 中定义。
+- `MemoryRequestMetrics` 在 `memory_pool/request_metrics.py` 中定义。
 - 删除 `EngineEventMetrics`、`SourceTrafficMetrics`、`MemoryPoolMetrics`、`InstanceMetricsSummary`、`BandwidthAllocation`。
 
 ### 11.8 `run.py`
@@ -744,13 +744,13 @@ KV workload generator 仍只负责生成 byte address、byte size 和 request ty
 ### 阶段三：事件驱动竞争
 
 - 在 `MemoryEngine` 中实现 `_advance`、`_pop_finished`、`_reallocate`、`_predict_earliest`。
-- 带宽固定均分（`peak / n`）。`submit` 统一 ARRIVAL/FINISH（`access.is_finish` 分支）。
+- 带宽固定均分（`peak / n`）。`submit` 统一 ARRIVAL/FINISH（`request.is_finish` 分支）。
 - Event：回调驱动，无 `EventKind`。`run()` 直接 `event.callback()`。
 - `SimpleSimulator` 管理 FINISH 事件堆，按 `request_id` 匹配替换。
 
 ### 后续阶段
 
-- **可配置带宽分配策略**：在 `MemoryAccess` 中恢复 `weight` 字段，增加 `WeightedTransferShare` 和 `SourceFairShare`，通过 `sharing_policy` 配置项选择。
+- **可配置带宽分配策略**：在 `MemoryRequest` 中恢复 `weight` 字段，增加 `WeightedTransferShare` 和 `SourceFairShare`，通过 `sharing_policy` 配置项选择。
 - POOL 作用域（共享带宽资源）：跨 engine 事件协调。
 - 读写分别限速或共享/全双工策略。
 - 请求取消和超时。
@@ -761,8 +761,8 @@ KV workload generator 仍只负责生成 byte address、byte size 和 request ty
 
 本方案完成后：
 
-- `MemoryEngine`：单介质实例，内部 `_advance` / `_pop_finished` / `_reallocate` / `_predict_earliest`。对外暴露 `submit(access, local_addr, now)`（统一入口，根据 `access.is_finish` 分支），以及同步 `issue_request()`。
-- `MemoryPool`：`submit(access, now)` 统一入口，校验→resolve→forward。不做统计。不 import Event。
-- `SimpleSimulator`：Event → MemoryAccess → `pool.submit()`（ARRIVAL 和 FINISH 走同一路径）。聚合 makespan 和 per-source 指标。
+- `MemoryEngine`：单介质实例，内部 `_advance` / `_pop_finished` / `_reallocate` / `_predict_earliest`。对外暴露 `submit(request, local_addr, now)`（统一入口，根据 `request.is_finish` 分支），以及同步 `issue_request()`。
+- `MemoryPool`：`submit(request, now)` 统一入口，校验→resolve→forward。不做统计。不 import Event。
+- `SimpleSimulator`：Event → MemoryRequest → `pool.submit()`（ARRIVAL 和 FINISH 走同一路径）。聚合 makespan 和 per-source 指标。
 - `Event`（`time` + `callback` + `request_id` + `metrics`）定义在 `des/event.py`，无 `EventKind`。`run()` 直接 `event.callback()`。
 - 现有单实例同步 `issue_request()` 使用方式保留，与事件路径互斥。

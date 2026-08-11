@@ -60,12 +60,11 @@ class AnalyticMediaSystem(BaseMediaSystem):
         num_write = 0
 
         for mem_req in mem_req_list:
-            obj = mem_req.memory_object
-            total_bytes += obj.size
+            total_bytes += mem_req.size
 
-            if obj.req_type == MemoryRequestType.KREAD:
+            if mem_req.req_type == MemoryRequestType.KREAD:
                 num_read += 1
-            elif obj.req_type == MemoryRequestType.KWRITE:
+            elif mem_req.req_type == MemoryRequestType.KWRITE:
                 num_write += 1
 
         total_time = total_bytes / self._bandwidth_bytes_per_sec

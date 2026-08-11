@@ -7,7 +7,8 @@ import sys
 import pytest
 
 from ..memory_type import MemoryRequestType
-from ..memory_pool import MemoryAccess, MemoryPool
+from ..memory_request import MemoryRequest
+from ..memory_pool import MemoryPool
 from ..des import SimpleSimulator
 from .test_memory_pool import _engine_config
 
@@ -104,7 +105,7 @@ class TestEventContract:
         result = sim.run()
         for m in result.request_metrics:
             assert m.average_bandwidth == pytest.approx(
-                m.size_bytes / m.latency)
+                m.size / m.latency)
             assert m.contention_delay == pytest.approx(
                 m.latency - m.standalone_time)
             assert m.contention_delay >= -1e-12
@@ -118,9 +119,9 @@ class TestEventContract:
         m = engine.issue_request([addr], [64], [MemoryRequestType.KREAD])
         assert m.total_time > 0
         # Then event.
-        access = MemoryAccess(
-            request_id="r1", source_id="s", addr=addr,
-            size_bytes=64, req_type=MemoryRequestType.KREAD,
+        access = MemoryRequest(
+            addr, 64, MemoryRequestType.KREAD,
+            request_id="r1", source_id="s",
         )
         entries = pool.submit(access, now=1.0)
         assert len(entries) == 1

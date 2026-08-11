@@ -245,7 +245,7 @@ def main(argv=None):
         with open(args.des_schedule) as f:
             entries = json.load(f)
 
-        from .memory_pool import MemoryAccess
+        from .memory_request import MemoryRequest
         from .des import SimpleSimulator
 
         sim = SimpleSimulator(pool)

@@ -147,7 +147,7 @@ class RamulatorMediaSystem(BaseMediaSystem):
         g = self._tx_bytes
         result: List[MediaRequest] = []
         for mem_req in mem_req_list:
-            obj = mem_req.memory_object
+            obj = mem_req
             # Align start down to tx boundary; cover the full range
             start = (obj.addr // g) * g
             end = obj.addr + obj.size

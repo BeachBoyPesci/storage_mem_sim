@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from .memory_access import MemoryAccess
+from ..memory_request import MemoryRequest
 
 if TYPE_CHECKING:
     from ..memory_config import MemoryEngineConfig
@@ -50,7 +50,7 @@ class MemoryPool:
     by subtracting the window base.
 
     A request always targets the instance its data was placed on
-    (allocation-time placement, not per-access balancing). Phase 1 does not
+    (allocation-time placement, not per-request balancing). Phase 1 does not
     support striping, migration, or replication across instances.
     """
 
@@ -198,32 +198,32 @@ class MemoryPool:
     # ------------------------------------------------------------------
 
     def submit(
-        self, access: MemoryAccess, *, now: float,
+        self, request: MemoryRequest, *, now: float,
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Submit one access; return [(rid, finish_time, metrics), ...].
+        """Submit one request; return [(rid, finish_time, metrics), ...].
 
-        Routes to the correct engine.  *access.is_finish* determines
+        Routes to the correct engine.  *request.is_finish* determines
         whether this is an ARRIVAL (add request) or FINISH (remove +
         reallocate).  Pure routing — no event-queue logic.
         """
-        if access.is_finish:
-            engine = self.get_engine(access.mem_engine_id or 0)
-            return engine.submit(access, local_addr=0, now=now)
+        if request.is_finish:
+            engine = self.get_engine(request.mem_engine_id or 0)
+            return engine.submit(request, local_addr=0, now=now)
 
-        engine = self._validate_access(access)
-        local_addr = access.addr - engine.global_base
-        return engine.submit(access, local_addr=local_addr, now=now)
+        engine = self._validate_request(request)
+        local_addr = request.addr - engine.global_base
+        return engine.submit(request, local_addr=local_addr, now=now)
 
-    def _validate_access(self, access: MemoryAccess) -> "MemoryEngine":
-        """Validate the access and return its owning engine."""
-        engine = self.resolve_engine(access.addr, access.size_bytes)
+    def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":
+        """Validate the request and return its owning engine."""
+        engine = self.resolve_engine(request.addr, request.size)
         if (
-            access.mem_engine_id is not None
-            and access.mem_engine_id != engine.instance_id
+            request.mem_engine_id is not None
+            and request.mem_engine_id != engine.instance_id
         ):
             raise ValueError(
-                f"access addr 0x{access.addr:x} belongs to engine "
+                f"request addr 0x{request.addr:x} belongs to engine "
                 f"{engine.instance_id}, but mem_engine_id "
-                f"{access.mem_engine_id} was specified"
+                f"{request.mem_engine_id} was specified"
             )
         return engine
