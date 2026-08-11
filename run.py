@@ -182,7 +182,7 @@ def main(argv=None):
             )
 
         if use_pool:
-            base_addr = pool.get_tensor_addr(region_size)
+            base_addr, _ = pool.get_tensor_addr(region_size)
         else:
             # Old path: instances=1 only.
             if engine.mem_config.storage_instance_num != 1:
@@ -256,7 +256,7 @@ def main(argv=None):
                 req_type = MemoryRequestType[req_type_name]
             except KeyError:
                 req_type = MemoryRequestType.KREAD
-            addr = pool.get_tensor_addr(size_bytes)
+            addr, _ = pool.get_tensor_addr(size_bytes)
             sim.schedule_arrival(
                 time=t,
                 source_id=source_id,
@@ -290,7 +290,7 @@ def main(argv=None):
     else:
         if use_pool:
             addrs = [
-                pool.get_tensor_addr(request_size)
+                pool.get_tensor_addr(request_size)[0]
                 for _ in range(num_requests)
             ]
         else:

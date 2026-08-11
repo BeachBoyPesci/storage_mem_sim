@@ -19,8 +19,8 @@ class TestSimpleSimulator:
         sim = SimpleSimulator(pool)
 
         # Two arrivals at the same time; seq ordering deterministic.
-        a0 = pool.get_tensor_addr(1000)
-        a1 = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a0, _ = pool.get_tensor_addr(1000)
+        a1, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
         _ = sim.schedule_arrival(
             time=0.0, source_id="sA", size_bytes=1000, addr=a0)
         _ = sim.schedule_arrival(
@@ -40,7 +40,7 @@ class TestSimpleSimulator:
         pool = _pool_with_ports(1, capacity=1.0, bandwidth=100.0)
         sim = SimpleSimulator(pool)
         for i in range(3):
-            addr = pool.get_tensor_addr(1000)
+            addr, _ = pool.get_tensor_addr(1000)
             sim.schedule_arrival(
                 time=i * 1e-9, source_id=f"src{i%2}",
                 size_bytes=1000, addr=addr,
@@ -61,7 +61,7 @@ class TestSimpleSimulator:
         sim = SimpleSimulator(pool)
         total_bytes = 0
         for i in range(4):
-            addr = pool.get_tensor_addr(500)
+            addr, _ = pool.get_tensor_addr(500)
             sim.schedule_arrival(
                 time=0.0, source_id="s", size_bytes=500, addr=addr,
             )
@@ -72,7 +72,7 @@ class TestSimpleSimulator:
     def test_per_request_consistency(self):
         pool = _pool_with_ports(2, capacity=1.0, bandwidth=100.0)
         sim = SimpleSimulator(pool)
-        addr = pool.get_tensor_addr(1000)
+        addr, _ = pool.get_tensor_addr(1000)
         sim.schedule_arrival(
             time=0.0, source_id="s", size_bytes=1000, addr=addr,
         )
@@ -89,8 +89,8 @@ class TestSimpleSimulator:
         peak = 100.0 * _GIB
         pool = _pool_with_ports(1, capacity=1.0, bandwidth=100.0)
         sim = SimpleSimulator(pool)
-        a0 = pool.get_tensor_addr(1000)
-        a1 = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a0, _ = pool.get_tensor_addr(1000)
+        a1, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
 
         # A arrives at t=0, B arrives halfway through A's standalone time.
         standalone = 1000.0 / peak
@@ -109,12 +109,12 @@ class TestSimulatorStaleEvents:
     def test_new_arrival_replaces_stale_finish(self):
         pool = _pool_with_ports(1, capacity=1.0, bandwidth=100.0)
         sim = SimpleSimulator(pool)
-        addr = pool.get_tensor_addr(500)
+        addr, _ = pool.get_tensor_addr(500)
         sim.schedule_arrival(
             time=0.0, source_id="s", size_bytes=500, addr=addr,
         )
         # Second arrival invalidates earlier finish predictions.
-        addr2 = pool.get_tensor_addr(500, mem_engine_id=0)
+        addr2, _ = pool.get_tensor_addr(500, mem_engine_id=0)
         sim.schedule_arrival(
             time=0.5e-9, source_id="s", size_bytes=500, addr=addr2,
         )

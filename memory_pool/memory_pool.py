@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from ..memory_request import MemoryRequest
+from ..memory_type import MemoryRequestType
 
 if TYPE_CHECKING:
     from ..memory_config import MemoryEngineConfig
@@ -141,8 +142,8 @@ class MemoryPool:
         size_bytes: int,
         *,
         mem_engine_id: Optional[int] = None,
-    ) -> int:
-        """Allocate a tensor and return its pool-global byte address.
+    ) -> Tuple[int, int]:
+        """Allocate *size_bytes* and return ``(global_addr, engine_id)``.
 
         Round-robin: start at the last-selected engine and scan forward,
         picking the first one with enough remaining capacity.
@@ -165,7 +166,7 @@ class MemoryPool:
                     f"aligned {size_bytes} B"
                 )
             local_addr = desc.engine.get_tensor_addr(size_bytes)
-            return desc.global_base + local_addr
+            return desc.global_base + local_addr, desc.engine.instance_id
 
         # Round-robin: scan from _rr_counter, pick first that fits.
         # TODO(phase-2): pluggable allocation policies.
@@ -177,7 +178,7 @@ class MemoryPool:
             if desc.engine.remaining_capacity_bytes >= aligned:
                 self._rr_counter = (idx + 1) % n
                 local_addr = desc.engine.get_tensor_addr(size_bytes)
-                return desc.global_base + local_addr
+                return desc.global_base + local_addr, desc.engine.instance_id
 
         detail = ", ".join(
             f"engine {i}: capacity={d.capacity_bytes}, "
@@ -188,6 +189,7 @@ class MemoryPool:
             f"no instance has remaining capacity >= aligned {size_bytes} B; "
             f"[{detail}]"
         )
+
 
     @staticmethod
     def _aligned_size(engine: "MemoryEngine", size_bytes: int) -> int:
@@ -210,7 +212,17 @@ class MemoryPool:
             engine = self.get_engine(request.mem_engine_id or 0)
             return engine.submit(request, now=now)
 
-        engine = self._validate_request(request)
+        if request.req_type == MemoryRequestType.KWRITE:
+            if request.addr is not None:
+                raise ValueError(
+                    f"write request must have addr=None, got {request.addr}"
+                )
+            _, engine_id = self.get_tensor_addr(
+                request.size, mem_engine_id=request.mem_engine_id,
+            )
+            engine = self.get_engine(engine_id)
+        else:
+            engine = self._validate_request(request)
         return engine.submit(request, now=now)
 
     def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":

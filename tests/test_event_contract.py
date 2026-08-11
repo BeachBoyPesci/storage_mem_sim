@@ -23,7 +23,7 @@ class TestEventContract:
     def test_arrival_creates_finish_events(self):
         pool = _pool(1, _engine_config())
         sim = SimpleSimulator(pool)
-        addr = pool.get_tensor_addr(1000)
+        addr, _ = pool.get_tensor_addr(1000)
         sim.schedule_arrival(
             time=0.0, source_id="s", size_bytes=1000, addr=addr,
         )
@@ -34,8 +34,8 @@ class TestEventContract:
     def test_new_arrival_invalidates_old_finish(self):
         pool = _pool(1, _engine_config())
         sim = SimpleSimulator(pool)
-        addr1 = pool.get_tensor_addr(1000, mem_engine_id=0)
-        addr2 = pool.get_tensor_addr(2000, mem_engine_id=0)
+        addr1, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        addr2, _ = pool.get_tensor_addr(2000, mem_engine_id=0)
         sim.schedule_arrival(
             time=0.0, source_id="s", size_bytes=1000, addr=addr1)
         sim.schedule_arrival(
@@ -48,8 +48,8 @@ class TestEventContract:
     def test_finish_returns_only_target_metrics(self):
         pool = _pool(1, _engine_config())
         sim = SimpleSimulator(pool)
-        a0 = pool.get_tensor_addr(1000, mem_engine_id=0)
-        a1 = pool.get_tensor_addr(2000, mem_engine_id=0)
+        a0, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a1, _ = pool.get_tensor_addr(2000, mem_engine_id=0)
         sim.schedule_arrival(
             time=0.0, source_id="sA", size_bytes=1000, addr=a0)
         sim.schedule_arrival(
@@ -68,8 +68,8 @@ class TestEventContract:
         T = 1000.0 / peak
         pool = _pool(1, _engine_config(bandwidth=100.0))
         sim = SimpleSimulator(pool)
-        a0 = pool.get_tensor_addr(1000, mem_engine_id=0)
-        a1 = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a0, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a1, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
         sim.schedule_arrival(
             time=0.0, source_id="A", size_bytes=1000, addr=a0)
         sim.schedule_arrival(
@@ -88,7 +88,7 @@ class TestEventContract:
         sim = SimpleSimulator(pool)
         total = 0
         for i in range(6):
-            addr = pool.get_tensor_addr(1000)
+            addr, _ = pool.get_tensor_addr(1000)
             sim.schedule_arrival(
                 time=0.0, source_id=f"s{i%3}", size_bytes=1000, addr=addr)
             total += 1000
@@ -99,7 +99,7 @@ class TestEventContract:
         pool = _pool(2, _engine_config(bandwidth=100.0))
         sim = SimpleSimulator(pool)
         for _ in range(4):
-            addr = pool.get_tensor_addr(500)
+            addr, _ = pool.get_tensor_addr(500)
             sim.schedule_arrival(
                 time=0.0, source_id="s", size_bytes=500, addr=addr)
         result = sim.run()
@@ -113,7 +113,7 @@ class TestEventContract:
     def test_sync_and_event_can_interleave(self):
         """Sync and event paths can be used on the same engine."""
         pool = _pool(1, _engine_config())
-        addr = pool.get_tensor_addr(64, mem_engine_id=0)
+        addr, _ = pool.get_tensor_addr(64, mem_engine_id=0)
         engine = pool.get_engine(0)
         # Sync first.
         m = engine.issue_request([addr], [64], [MemoryRequestType.KREAD])

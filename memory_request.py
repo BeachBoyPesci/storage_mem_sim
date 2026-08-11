@@ -25,9 +25,9 @@ class MemoryRequest:
     (event path).
     """
 
-    addr: int
     size: int
     req_type: MemoryRequestType
+    addr: Optional[int] = None
     media_req_num: int = 0
     media_request_list: List["MediaRequest"] = field(default_factory=list)
 
@@ -39,7 +39,7 @@ class MemoryRequest:
 
     def __init__(
         self,
-        addr: int,
+        addr: Optional[int],
         size: int,
         req_type: MemoryRequestType,
         *,
@@ -49,6 +49,8 @@ class MemoryRequest:
         mem_engine_id: Optional[int] = None,
         is_finish: bool = False,
     ):
+        if addr is not None and addr < 0:
+            raise ValueError(f"addr must be >= 0 or None, got {addr}")
         self.addr = addr
         self.size = size
         self.req_type = req_type

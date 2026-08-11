@@ -145,8 +145,8 @@ def get_tensor_addr(
     size_bytes: int,
     *,
     mem_engine_id: int | None = None,
-) -> int:
-    """Allocate a tensor and return its pool-global byte address."""
+) -> tuple[int, int]:
+    """Allocate and return (global_addr, engine_id)."""
 ```
 
 处理流程：
@@ -326,9 +326,18 @@ FINISH:
 def submit(
     self, request: MemoryRequest, *, now: float,
 ) -> list[tuple[str, float, MemoryRequestMetrics]]:
-    """统一入口：is_finish=False 为 ARRIVAL，True 为 FINISH 回调。"""
+    """统一入口。"""
+```
 
-def notify_finish(  # 删除，统一到 submit
+路由规则：
+
+| 条件 | 处理 |
+|---|---|
+| `request.is_finish` | `get_engine(mem_engine_id)` |
+| `request.req_type == KWRITE` (addr=None) | `get_tensor_addr(size, mem_engine_id)` → `get_engine(engine_id)` |
+| 其它（KREAD） | `_validate_request` 二分查找窗口 |
+
+`get_tensor_addr` 返回 `(global_addr, engine_id)`。写请求通过它分配空间并扣容量，读请求使用预先分配的地址。
 ```
 
 ## 7. 基于当前 Analytic 后端实现动态竞争
@@ -467,8 +476,8 @@ pool = MemoryPool(instance_count=4, engine_config=engine_config)
 ### 8.3 分配数据
 
 ```python
-addr = pool.get_tensor_addr(kv_size_bytes)
-addr = pool.get_tensor_addr(kv_size_bytes, mem_engine_id=2)
+addr, _ = pool.get_tensor_addr(kv_size_bytes)
+addr, _ = pool.get_tensor_addr(kv_size_bytes, mem_engine_id=2)
 ```
 
 ### 8.4 父项目事件处理伪代码

@@ -123,7 +123,7 @@ class SimpleSimulator:
                 if metrics is not None:
                     self._request_metrics.append(metrics)
                 request = MemoryRequest(
-                    0, metrics.size, MemoryRequestType.KREAD,
+                    None, metrics.size, MemoryRequestType.KREAD,
                     request_id=request_id,
                     source_id=metrics.source_id,
                     mem_engine_id=metrics.mem_engine_id,

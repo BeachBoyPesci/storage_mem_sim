@@ -50,30 +50,30 @@ class TestPoolAddressWindows:
 
     def test_get_tensor_addr_returns_global(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addr = pool.get_tensor_addr(64)
+        addr, _ = pool.get_tensor_addr(64)
         assert 0 <= addr < _GIB
         assert addr % 64 == 0
 
     def test_specified_engine_allocation(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addr = pool.get_tensor_addr(64, mem_engine_id=1)
+        addr, _ = pool.get_tensor_addr(64, mem_engine_id=1)
         assert _GIB <= addr < 2 * _GIB
 
     def test_round_robin_placement(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addrs = [pool.get_tensor_addr(64) for _ in range(4)]
+        addrs = [pool.get_tensor_addr(64)[0] for _ in range(4)]
         assert [addr // _GIB for addr in addrs] == [0, 1, 0, 1]
 
     def test_least_allocated_placement(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addrs = [pool.get_tensor_addr(64) for _ in range(3)]
+        addrs = [pool.get_tensor_addr(64)[0] for _ in range(3)]
         # ROUND_ROBIN wraps: 0, 1, 0.
         assert [addr // _GIB for addr in addrs] == [0, 1, 0]
 
     def test_least_allocated_skips_insufficient_capacity(self):
         pool = _pool(instance_count=2, capacity=1.0)
         pool.get_tensor_addr(_GIB)
-        addr = pool.get_tensor_addr(64)
+        addr, _ = pool.get_tensor_addr(64)
         assert _GIB <= addr < 2 * _GIB
 
     def test_window_boundary_exact_fit(self):
@@ -108,7 +108,7 @@ class TestPoolAddressWindows:
 
     def test_global_local_conversion_roundtrip(self):
         pool = _pool(instance_count=3, capacity=1.0)
-        addr = pool.get_tensor_addr(64)
+        addr, _ = pool.get_tensor_addr(64)
         engine = pool.resolve_engine(addr, 64)
         local = addr - engine.global_base
         assert engine.instance_id == addr // _GIB
