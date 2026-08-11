@@ -4,8 +4,9 @@ import heapq
 import logging
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from ..memory_pool import MemoryRequestMetrics
+from ..memory_pool import MemoryAccess, MemoryRequestMetrics
 from ..memory_type import MemoryRequestType
+from .event import Event
 from .result import SimulationResult
 
 if TYPE_CHECKING:
@@ -17,15 +18,13 @@ logger = logging.getLogger(__name__)
 class SimpleSimulator:
     """Discrete-event loop driving the pool's event API.
 
-    Does not know about individual engines. Receives incremental
-    predictions from pool.submit() and manages the event heap.
+    Does not know about individual engines.  Events carry callbacks
+    that call pool.submit() — the simulator just pops and invokes.
     """
 
     def __init__(self, pool: "MemoryPool"):
-        from ..memory_pool.event import Event
-
-        self._pool = pool
-        self._heap: List[Tuple[float, int, "Event"]] = []
+        self._memory_pool = pool
+        self._events: List[Tuple[float, int, "Event"]] = []
         self._seq = 0
         self._scheduled_count = 0
         self._request_metrics: List[MemoryRequestMetrics] = []
@@ -40,45 +39,37 @@ class SimpleSimulator:
         addr: int,
         engine_id: Optional[int] = None,
     ) -> str:
-        """Schedule an arrival event. *addr* must be pool-global.
-
-        Args:
-            time: Arrival time in seconds.
-            source_id: Access origin identifier.
-            size_bytes: Request size in bytes.
-            req_type: Request type (default KREAD).
-            addr: Pool-global byte address.
-            engine_id: Optional target engine instance (None = resolve by address).
-        """
-        from ..memory_pool.event import Event, EventKind
-
+        """Schedule an arrival event. *addr* must be pool-global."""
         if req_type is None:
             req_type = MemoryRequestType.KREAD
 
         request_id = f"req:{source_id}:{self._scheduled_count}"
         self._scheduled_count += 1
+        pool = self._memory_pool
 
-        self._seq += 1
-        ev = Event(
-            time=time, seq=0, kind=EventKind.ARRIVAL,
-            source_id=source_id, request_id=request_id,
-            mem_engine_id=engine_id,
-            addr=addr, size_bytes=size_bytes,
-            req_type=req_type,
-        )
-        heapq.heappush(self._heap, (ev.time, self._seq, ev))
+        def _on_arrival() -> None:
+            access = MemoryAccess(
+                request_id=request_id,
+                source_id=source_id,
+                addr=addr,
+                size_bytes=size_bytes,
+                req_type=req_type,
+                mem_engine_id=engine_id,
+                is_finish=False,
+            )
+            self._refresh_finish_events(
+                pool.submit(access, now=time),
+            )
+
+        self._push_event(Event(time=time, callback=_on_arrival,
+                               request_id=request_id))
         return request_id
 
     def run(self) -> SimulationResult:
         """Process the event queue until empty."""
-        from ..memory_pool.event import EventKind
-
-        while self._heap:
-            event = heapq.heappop(self._heap)[2]
-            if event.kind is EventKind.ARRIVAL:
-                self._handle_arrival(event)
-            else:
-                self._handle_finish(event)
+        while self._events:
+            event = heapq.heappop(self._events)[2]
+            event.callback()
 
         makespan = 0.0
         if self._request_metrics:
@@ -105,35 +96,47 @@ class SimpleSimulator:
         )
 
     # ------------------------------------------------------------------
-    # Internal handlers
+    # Internal helpers
     # ------------------------------------------------------------------
 
-    def _handle_arrival(self, event) -> None:
-        entries = self._pool.submit(event)
-        # entries: [(rid, finish_time, metrics), ...]
-        self._refresh_finish_events(entries)
-
-    def _handle_finish(self, event) -> None:
-        if event.metrics is not None:
-            self._request_metrics.append(event.metrics)
+    def _push_event(self, event: Event) -> None:
+        self._seq += 1
+        object.__setattr__(event, 'seq', self._seq)
+        heapq.heappush(self._events, (event.time, event.seq, event))
 
     def _refresh_finish_events(self, entries: list) -> None:
-        from ..memory_pool.event import Event, EventKind
+        """Replace stale FINISH events and create new ones."""
+        pool = self._memory_pool
 
         for request_id, finish_time, metrics in entries:
-            self._heap = [
-                e for e in self._heap
-                if not (e[2].kind is EventKind.FINISH
-                        and e[2].request_id == request_id)
-            ]
-            heapq.heapify(self._heap)
+            # Remove old FINISH: scan, pop, restore heap.
+            for i in range(len(self._events)):
+                ev = self._events[i][2]
+                if ev.metrics is not None and ev.request_id == request_id:
+                    self._events[i] = self._events[-1]
+                    self._events.pop()
+                    if i < len(self._events):
+                        heapq._siftup(self._events, i)
+                        heapq._siftdown(self._events, 0, i)
+                    break
 
-            self._seq += 1
-            ev = Event(
-                time=finish_time, seq=0, kind=EventKind.FINISH,
-                source_id="", request_id=request_id,
-                mem_engine_id=0,
-                addr=0, size_bytes=0, req_type=MemoryRequestType.KREAD,
-                metrics=metrics,
-            )
-            heapq.heappush(self._heap, (ev.time, self._seq, ev))
+            def _on_finish() -> None:
+                if metrics is not None:
+                    self._request_metrics.append(metrics)
+                access = MemoryAccess(
+                    request_id=request_id,
+                    source_id=metrics.source_id,
+                    addr=0,
+                    size_bytes=metrics.size_bytes,
+                    req_type=MemoryRequestType.KREAD,
+                    mem_engine_id=metrics.mem_engine_id,
+                    is_finish=True,
+                )
+                self._refresh_finish_events(
+                    pool.submit(access, now=finish_time),
+                )
+
+            self._push_event(Event(
+                time=finish_time, callback=_on_finish,
+                request_id=request_id, metrics=metrics,
+            ))

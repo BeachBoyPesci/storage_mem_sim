@@ -44,7 +44,7 @@ def main(argv=None):
     from .memory_config import MemoryEngineConfig
     from .memory_metrics import MemoryMetrics
     from .memory_type import MemoryRequestType, MemoryType
-    from .memory_pool import MemoryPool, AllocationPolicy
+    from .memory_pool import MemoryPool
     from .workload.kv_cache_load import (
         KVCacheLoadGenerator,
         KVPageLayout,
@@ -125,7 +125,6 @@ def main(argv=None):
         media_type=backend,
         capacity=per_gib,
         bandwidth=mc.get("bandwidth", 100.0),
-        transport_bandwidth=mc.get("transport_bandwidth", 0.0),
         config_path=os.path.abspath(mc["config"]) if mc.get("config") else "",
         # MQSim-specific
         ssd_config_path=os.path.abspath(mc["ssd_config"]) if mc.get("ssd_config") else "",
@@ -144,17 +143,7 @@ def main(argv=None):
     # ---- build engine or pool ----
     use_pool = instances > 1
     if use_pool:
-        alloc_policy_name = pool_block.get("allocation_policy", "least_allocated")
-        try:
-            allocation_policy = AllocationPolicy[alloc_policy_name.upper()]
-        except KeyError:
-            allocation_policy = AllocationPolicy.LEAST_ALLOCATED
-
-        pool = MemoryPool.from_homogeneous(
-            instance_count=instances,
-            engine_config=engine_cfg,
-            allocation_policy=allocation_policy,
-        )
+        pool = MemoryPool(instances, engine_cfg)
         engine = pool.instances[0]
         ms = engine.media_system
         tx_bytes = getattr(ms, '_tx_bytes', request_size)
@@ -232,13 +221,9 @@ def main(argv=None):
                 print(f"  Build: cd media/mqsim_wrapper && pip install -e .")
     else:
         print(f"Bandwidth:  {mc.get('bandwidth', 100.0)} GB/s")
-        if mc.get("transport_bandwidth", 0) > 0:
-            print(f"Transport:  {mc['transport_bandwidth']} GB/s")
 
     print(f"Capacity:   {mc.get('capacity', 32.0)} GB  |  "
           f"Inst: {instances}")
-    if use_pool:
-        print(f"Alloc:      {alloc_policy_name}")
     if generated_workload is not None:
         print("Workload:   kv_cache_load")
         print(f"Pattern:    {workload_cfg.pattern.value}")

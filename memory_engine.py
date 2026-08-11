@@ -206,64 +206,43 @@ class MemoryEngine:
         local_addr: int,
         now: float,
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Submit one access; return [(rid, finish_time, metrics), ...].
+        """Submit one access; return earliest-finishing predictions.
 
-        Metrics are computed at prediction time and bound to each
-        returned entry.  The Simulator creates FINISH events with
-        these metrics already attached.
+        If *access.is_finish* is True, this is a FINISH callback:
+        the completed request is removed and bandwidth is reallocated.
+        Otherwise it is an ARRIVAL: a new request is added.
         """
-        from .memory_pool.memory_access import ActiveMemoryRequest, MemoryRequestMetrics
-
         self._enter_runtime_mode("event")
         self._advance(now)
-        self._collect_completed()
+        self._pop_finished()
 
-        if access.request_id in self._active_requests:
-            raise ValueError(
-                f"request_id {access.request_id!r} is already active"
+        if access.is_finish:
+            # Only the earliest-finishing request(s) hold a FINISH event.
+            # A sibling callback (same time) may have already popped this
+            # request via _pop_finished — that is expected and harmless.
+            if access.request_id in self._active_requests:
+                self._active_requests.pop(access.request_id)
+        else:
+            if access.request_id in self._active_requests:
+                raise ValueError(
+                    f"request_id {access.request_id!r} is already active"
+                )
+            from .memory_pool.memory_access import ActiveMemoryRequest
+            self._active_requests[access.request_id] = ActiveMemoryRequest(
+                access=access,
+                local_addr=local_addr,
+                mem_engine_id=self.instance_id,
+                arrival_time=now,
+                remaining_bytes=float(access.size_bytes),
             )
-        self._active_requests[access.request_id] = ActiveMemoryRequest(
-            access=access,
-            local_addr=local_addr,
-            mem_engine_id=self.instance_id,
-            arrival_time=now,
-            remaining_bytes=float(access.size_bytes),
-        )
 
         self._reallocate()
 
-        # Build predictions via cascading completion simulation.
-        effective_bw = self.media_system.effective_bandwidth
-        cascaded = self._cascade_predictions(now, self._active_requests, effective_bw)
-
-        def _make_metrics(req, finish_time):
-            latency = finish_time - req.arrival_time
-            standalone = req.access.size_bytes / effective_bw if effective_bw > 0 else float("inf")
-            return MemoryRequestMetrics(
-                request_id=req.access.request_id,
-                source_id=req.access.source_id,
-                mem_engine_id=req.mem_engine_id,
-                arrival_time=req.arrival_time,
-                finish_time=finish_time,
-                size_bytes=req.access.size_bytes,
-                latency=latency,
-                standalone_time=standalone,
-                contention_delay=latency - standalone,
-                average_bandwidth=(
-                    req.access.size_bytes / latency if latency > 0 else 0.0
-                ),
-            )
-
-        result: List[Tuple[str, float, MemoryRequestMetrics]] = []
-        for rid, req in self._active_requests.items():
-            ft = cascaded[rid]
-            m = _make_metrics(req, ft)
-            result.append((rid, ft, m))
-
-        return result
+        predictions = self._predict_earliest(now)
+        return self._build_results(predictions)
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Internal helpers (called in submit order)
     # ------------------------------------------------------------------
 
     def _advance(self, now: float) -> None:
@@ -281,74 +260,69 @@ class MemoryEngine:
         delta = now - self._last_update_time
         if delta > 0 and self._active_requests:
             for req in self._active_requests.values():
-                transferred = req.allocated_bandwidth * delta
-                req.transferred_bytes += transferred
-                req.remaining_bytes = max(
-                    0.0, req.remaining_bytes - transferred
-                )
+                req.remaining_bytes -= req.allocated_bandwidth * delta
+                req.remaining_bytes = max(0.0, req.remaining_bytes)
         self._last_update_time = now
 
-    def _collect_completed(self) -> None:
+    def _pop_finished(self) -> None:
         """Pop finished requests from the active set."""
-        completed_ids = [
-            rid for rid, req in self._active_requests.items()
-            if req.remaining_bytes <= _DEFAULT_COMPLETION_EPSILON_BYTES
-        ]
-        for rid in completed_ids:
-            self._active_requests.pop(rid)
+        for rid, req in list(self._active_requests.items()):
+            if req.remaining_bytes <= _DEFAULT_COMPLETION_EPSILON_BYTES:
+                self._active_requests.pop(rid)
 
     def _reallocate(self) -> None:
         """Equal split of effective bandwidth among active requests."""
         if not self._active_requests:
             return
-        bw = self.media_system.effective_bandwidth
+        bw = self.media_system._bandwidth_bytes_per_sec
         share = bw / len(self._active_requests)
         for req in self._active_requests.values():
             req.allocated_bandwidth = share
 
-    def _cascade_predictions(
-        self,
-        now: float,
-        active: dict,
-        effective_bw: float,
-    ) -> dict:
-        """Return ``{request_id: finish_time}`` via cascading completion.
+    def _predict_earliest(self, now: float) -> List[Tuple[str, float]]:
+        """Return ``[(rid, ft), ...]`` for the earliest-finishing request(s).
 
-        Simulates each request finishing in order of earliest projected
-        end, reallocating the freed bandwidth to the survivors at each
-        step.  Pure computation — no side effects.
+        Pure computation — no side effects, no metrics allocation.
         """
-        if effective_bw <= 0:
-            return {rid: float("inf") for rid in active}
+        if not self._active_requests:
+            return []
 
-        # Working copies: each entry is [rid, arrival, remaining].
-        pending = [
-            [rid, req.arrival_time, req.remaining_bytes]
-            for rid, req in active.items()
-        ]
-        n = len(pending)
-        share = effective_bw / n
-        sim_time = float(now)
-        result: dict[str, float] = {}
+        all_ft: List[Tuple[str, float]] = []
+        for rid, req in self._active_requests.items():
+            if req.allocated_bandwidth > 0:
+                ft = now + req.remaining_bytes / req.allocated_bandwidth
+            else:
+                ft = float("inf")
+            all_ft.append((rid, ft))
 
-        while pending:
-            # Find the request that finishes earliest.
-            earliest_idx = 0
-            earliest_delta = pending[0][2] / share
-            for i, (_, _, rem) in enumerate(pending):
-                delta = rem / share
-                if delta < earliest_delta:
-                    earliest_delta = delta
-                    earliest_idx = i
+        min_ft = min(ft for _, ft in all_ft)
+        return [(rid, ft) for rid, ft in all_ft if ft == min_ft]
 
-            sim_time += earliest_delta
-            for p in pending:
-                p[2] -= share * earliest_delta
+    def _build_results(
+        self, predictions: List[Tuple[str, float]],
+    ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
+        """Wrap ``[(rid, ft), ...]`` with MemoryRequestMetrics."""
+        from .memory_pool.memory_access import MemoryRequestMetrics
 
-            rid = pending.pop(earliest_idx)[0]
-            result[rid] = sim_time
-
-            if pending:
-                share = effective_bw / len(pending)
-
+        effective_bw = self.media_system._bandwidth_bytes_per_sec
+        result: List[Tuple[str, float, MemoryRequestMetrics]] = []
+        for rid, ft in predictions:
+            req = self._active_requests[rid]
+            latency = ft - req.arrival_time
+            standalone = req.access.size_bytes / effective_bw if effective_bw > 0 else float("inf")
+            m = MemoryRequestMetrics(
+                request_id=rid,
+                source_id=req.access.source_id,
+                mem_engine_id=req.mem_engine_id,
+                arrival_time=req.arrival_time,
+                finish_time=ft,
+                size_bytes=req.access.size_bytes,
+                latency=latency,
+                standalone_time=standalone,
+                contention_delay=latency - standalone,
+                average_bandwidth=(
+                    req.access.size_bytes / latency if latency > 0 else 0.0
+                ),
+            )
+            result.append((rid, ft, m))
         return result

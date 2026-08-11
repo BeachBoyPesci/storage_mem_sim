@@ -10,10 +10,7 @@ _GIB = 1024 ** 3
 
 
 def _pool_with_ports(instance_count=1, **kwargs):
-    return MemoryPool.from_homogeneous(
-        instance_count,
-        _engine_config(**kwargs),
-    )
+    return MemoryPool(instance_count, _engine_config(**kwargs))
 
 
 class TestSimpleSimulator:

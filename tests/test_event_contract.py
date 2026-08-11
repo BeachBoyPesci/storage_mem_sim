@@ -7,13 +7,15 @@ import sys
 import pytest
 
 from ..memory_type import MemoryRequestType
-from ..memory_pool import Event, EventKind, MemoryPool
+from ..memory_pool import MemoryAccess, MemoryPool
 from ..des import SimpleSimulator
 from .test_memory_pool import _engine_config
 
 _GIB = 1024 ** 3
 
-_pool = MemoryPool.from_homogeneous
+
+def _pool(instance_count, engine_config, **kwargs):
+    return MemoryPool(instance_count, engine_config, **kwargs)
 
 
 class TestEventContract:
@@ -111,13 +113,11 @@ class TestEventContract:
         pool = _pool(1, _engine_config())
         addr = pool.get_tensor_addr(64, mem_engine_id=0)
         # Use submit to lock engine to event mode.
-        ev = Event(
-            time=0.0, seq=0, kind=EventKind.ARRIVAL,
-            source_id="s", request_id="r1",
-            mem_engine_id=None, addr=addr, size_bytes=64,
-            req_type=MemoryRequestType.KREAD,
+        access = MemoryAccess(
+            request_id="r1", source_id="s", addr=addr,
+            size_bytes=64, req_type=MemoryRequestType.KREAD,
         )
-        pool.submit(ev)
+        pool.submit(access, now=0.0)
         # Now sync issue_request() on the same engine must raise.
         engine = pool.get_engine(0)
         with pytest.raises(RuntimeError, match="locked"):

@@ -3,15 +3,12 @@
 Import direction: ``des → memory_pool`` only.
 """
 
-from ..memory_pool.event import Event, EventKind
+from .event import Event
 from .result import SimulationResult
 from .simulator import SimpleSimulator
 
 __all__ = [
     "Event",
-    "EventKind",
     "SimpleSimulator",
     "SimulationResult",
 ]
-
-

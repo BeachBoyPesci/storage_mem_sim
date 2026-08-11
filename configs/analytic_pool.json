@@ -3,8 +3,7 @@
     "media_config": {
         "media_type": "analytic",
         "capacity": 4.0,
-        "bandwidth": 400.0,
-        "transport_bandwidth": 100.0
+        "bandwidth": 400.0
     },
     "pool": {
         "instances": 4,

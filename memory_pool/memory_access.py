@@ -40,6 +40,7 @@ class MemoryAccess:
     size_bytes: int
     req_type: MemoryRequestType
     mem_engine_id: Optional[int] = None
+    is_finish: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -56,6 +57,11 @@ class MemoryAccess:
             raise ValueError(f"addr must be >= 0, got {self.addr}")
         if self.size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {self.size_bytes}")
+        if self.mem_engine_id is not None and self.mem_engine_id < 0:
+            raise ValueError(
+                f"mem_engine_id must be >= 0 or None, "
+                f"got {self.mem_engine_id}"
+            )
         if not isinstance(self.req_type, MemoryRequestType):
             raise ValueError(
                 "req_type must be MemoryRequestType, "
@@ -79,7 +85,6 @@ class ActiveMemoryRequest:
         arrival_time: Arrival time in seconds.
         remaining_bytes: Bytes still to transfer (B).
         allocated_bandwidth: Bandwidth currently allocated (B/s).
-        transferred_bytes: Bytes transferred so far (B).
     """
 
     access: MemoryAccess
@@ -88,7 +93,6 @@ class ActiveMemoryRequest:
     arrival_time: float
     remaining_bytes: float
     allocated_bandwidth: float = 0.0
-    transferred_bytes: float = 0.0
 
 
 @dataclass(frozen=True)

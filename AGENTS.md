@@ -102,9 +102,9 @@ service instances → SimpleSimulator (or parent DES) → collect arrivals
 | `memory_pool/` | 多实例管理系统：global 地址窗口、placement policy（ROUND_ROBIN / LEAST_ALLOCATED）、global↔local 地址转换、池级 `submit()`/`finish()`（事件驱动接口）、同步 `issue_request`（各实例并行取 max 时间）、池级指标（`MemoryPoolMetrics`）、池构造。 |
 | `des/` | 离散事件仿真适配器：`Event`/`EventQueue`（事件数据结构）、`SimpleSimulator`（事件队列、逐个下发 ARRIVAL、接收 FINISH 预测、generation 和 stale 检测）、`SimulationResult`（聚合结果）。引向为 `des → memory_pool`，反向禁止。 |
 | `media/base_media.py` | 后端抽象接口 `handler_mem_request(List[MemoryRequest]) -> MediaMetrics` 与后端累计指标。 |
-| `media/media_config.py` | 公共及 backend-specific 配置。新增 `transport_bandwidth`（GiB/s；0=无传输瓶颈；Analytic only）。保持公共字段的单位兼容性。 |
+| `media/media_config.py` | 公共及 backend-specific 配置。保持公共字段的单位兼容性。 |
 | `media/media_system_factory.py` | 后端注册和惰性创建。新增后端应扩展 enum、实现类、注册逻辑和测试。 |
-| `media/analytic_media_system.py` | `sum(bytes) / bandwidth`；委托给无状态 `AnalyticBandwidthModel`（batch 和 event 共用）。暴露只读 `media_bandwidth`/`transport_bandwidth`/`effective_bandwidth`。 |
+| `media/analytic_media_system.py` | `sum(bytes) / bandwidth`。暴露只读 `media_bandwidth` / `effective_bandwidth`。 |
 | `media/ramulator_media_system.py` | 读取 Ramulator YAML，推导 transaction bytes/频率，按覆盖的 transaction 边界拆请求，生成临时 LD/ST trace，组装并运行 Ramulator2。多 controller 周期取最大值。 |
 | `media/mqsim_media_system.py` | 协调 SSD XML 几何加载、trace 生成、workload XML 生成、native MQSim 执行与结果映射。 |
 | `media/mqsim_wrapper/pymqsim/trace.py` | byte address 到 LBA、相邻同类型请求合并、request-size 切片、CWDP 地址布局及理论上界公式。几何函数调用前必须加载 SSD XML。 |
@@ -287,7 +287,6 @@ python -m pytest tests/workload/kv_cache_load -m mqsim_native
 - `MemoryEngineConfig.dp_size` / `storage_instance_num` 已弃用：值≠1 时发 `DeprecationWarning`，engine 不再执行 DP 复制或实例路由。多实例语义统一在 `MemoryPool`。
 - `MemoryEngineConfig` 的容量现在是**单实例口径**：`total_capacity == per_dp_capacity == capacity`。run.py 在 `instances>1` 时把 JSON `capacity` 按总容量解释并 ÷instances 后构造每实例配置，同时打印醒目警告。
 - 事件模式（`pool.execute()`）和同步模式（`issue_request`）在同一 engine 上互斥——首次调用锁定 runtime mode，混用抛 `RuntimeError`。
-- `transport_bandwidth` 在 `MediaConfig` 中以 GiB/s 配置，0 = 未配置（无传输瓶颈）。仅 Analytic 后端消费。
 - 事件指标（延迟、contention delay、per-source）不并入 `MemoryEngineMetrics.bandwidth`——同步和事件是两个独立口径。
 - 池级 `issue_request` 的 `time` 取各实例最大值，`bandwidth = Σbytes / max_time`（精确重算），`iops = Σ 非 None`（全 None 则 None）。
 - 事件队列、generation 计数器、stale 检测和 FINISH 事件生命周期由各 `MemoryEngine` 内部管理；池和 DES 不接触这些细节。

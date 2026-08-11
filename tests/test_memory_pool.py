@@ -9,44 +9,36 @@ from ..media import (
     MediaConfig,
     MediaSystemBackend,
 )
-from ..memory_pool import (
-    AllocationPolicy,
-    Event,
-    EventKind,
-    MemoryPool,
-    MemoryPoolConfig,
-)
+from ..memory_pool import MemoryAccess, MemoryPool, MemoryPoolConfig
 
 _GIB = 1024 ** 3
 
 
-def _arrival(request_id, addr, size_bytes, source_id="s0", time=0.0):
-    return Event(
-        time=time, seq=0, kind=EventKind.ARRIVAL,
-        source_id=source_id, request_id=request_id,
-        mem_engine_id=None, addr=addr, size_bytes=size_bytes,
+def _access(request_id, addr, size_bytes, source_id="s0"):
+    return MemoryAccess(
+        request_id=request_id,
+        source_id=source_id,
+        addr=addr,
+        size_bytes=size_bytes,
         req_type=MemoryRequestType.KREAD,
     )
 
 
-def _engine_config(capacity=1.0, bandwidth=100.0, transport=0.0):
+def _engine_config(capacity=1.0, bandwidth=100.0):
     return MemoryEngineConfig(
         memory_type=MemoryType.HBM,
         media_config=MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
             capacity=capacity,
             bandwidth=bandwidth,
-            transport_bandwidth=transport,
         ),
     )
 
 
-def _pool(instance_count=2, capacity=1.0, bandwidth=100.0,
-          transport=0.0, **kwargs):
-    return MemoryPool.from_homogeneous(
+def _pool(instance_count=2, capacity=1.0, bandwidth=100.0, **kwargs):
+    return MemoryPool(
         instance_count,
-        _engine_config(capacity=capacity, bandwidth=bandwidth,
-                       transport=transport),
+        _engine_config(capacity=capacity, bandwidth=bandwidth),
         **kwargs,
     )
 
@@ -69,20 +61,18 @@ class TestPoolAddressWindows:
         assert _GIB <= addr < 2 * _GIB
 
     def test_round_robin_placement(self):
-        pool = _pool(instance_count=2, capacity=1.0,
-                     allocation_policy=AllocationPolicy.ROUND_ROBIN)
+        pool = _pool(instance_count=2, capacity=1.0)
         addrs = [pool.get_tensor_addr(64) for _ in range(4)]
         assert [addr // _GIB for addr in addrs] == [0, 1, 0, 1]
 
     def test_least_allocated_placement(self):
-        pool = _pool(instance_count=2, capacity=1.0,
-                     allocation_policy=AllocationPolicy.LEAST_ALLOCATED)
+        pool = _pool(instance_count=2, capacity=1.0)
         addrs = [pool.get_tensor_addr(64) for _ in range(3)]
+        # ROUND_ROBIN wraps: 0, 1, 0.
         assert [addr // _GIB for addr in addrs] == [0, 1, 0]
 
     def test_least_allocated_skips_insufficient_capacity(self):
-        pool = _pool(instance_count=2, capacity=1.0,
-                     allocation_policy=AllocationPolicy.LEAST_ALLOCATED)
+        pool = _pool(instance_count=2, capacity=1.0)
         pool.get_tensor_addr(_GIB)
         addr = pool.get_tensor_addr(64)
         assert _GIB <= addr < 2 * _GIB
@@ -103,7 +93,7 @@ class TestPoolAddressWindows:
     def test_cross_window_submit_rejected(self):
         pool = _pool(instance_count=2, capacity=1.0)
         with pytest.raises(ValueError, match="spans beyond"):
-            pool.submit(_arrival("r1", _GIB - 32, 64))
+            pool.submit(_access("r1", _GIB - 32, 64), now=0.0)
 
     def test_all_instances_exhausted_raises(self):
         pool = _pool(instance_count=2, capacity=1.0)
@@ -129,14 +119,14 @@ class TestPoolAddressWindows:
 class TestPoolSubmitRouting:
     def test_submit_routes_by_address(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        e1 = pool.submit(_arrival("r1", 0, 1000))
-        e2 = pool.submit(_arrival("r2", _GIB, 1000))
+        e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
+        e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
         assert e1[0][0] == "r1"
         assert e2[0][0] == "r2"
 
     def test_submit_returns_predictions(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        entries = pool.submit(_arrival("r1", _GIB, 1000))
+        entries = pool.submit(_access("r1", _GIB, 1000), now=0.0)
         assert len(entries) == 1
         rid, ft, m = entries[0]
         assert rid == "r1"
@@ -145,8 +135,8 @@ class TestPoolSubmitRouting:
     def test_engine_scope_instances_independent(self):
         """ENGINE scope: requests on different engines never contend."""
         pool = _pool(instance_count=2, capacity=1.0, bandwidth=100.0)
-        e1 = pool.submit(_arrival("r1", 0, 1000))
-        e2 = pool.submit(_arrival("r2", _GIB, 1000))
+        e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
+        e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
         # Different engines: each gets full bandwidth, same finish time.
         assert e1[0][1] == pytest.approx(e2[0][1])
 
@@ -162,9 +152,9 @@ class TestPoolFactory:
         assert total == 8 * _GIB
 
     def test_requires_at_least_one_engine(self):
-        with pytest.raises(ValueError, match="at least one engine"):
-            MemoryPool([])
+        with pytest.raises(ValueError, match="instance_count must be >= 1"):
+            MemoryPool(0, _engine_config())
 
     def test_pool_config_defaults(self):
         config = MemoryPoolConfig(instance_count=2)
-        assert config.allocation_policy is AllocationPolicy.LEAST_ALLOCATED
+        assert config.instance_count == 2

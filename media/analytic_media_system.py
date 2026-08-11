@@ -41,32 +41,8 @@ class AnalyticMediaSystem(BaseMediaSystem):
                 f"bandwidth must be > 0 for Analytic backend, got {config.bandwidth}"
             )
         # Convert bandwidth from GB/s (GiB/s semantics) to B/s.
-        # transport_bandwidth == 0 means no transport bottleneck.
-        self._media_bw_bps = config.bandwidth * (1024 ** 3)
-        _tb = config.transport_bandwidth
-        self._transport_bw_bps = _tb * (1024 ** 3) if _tb > 0 else None
+        self._bandwidth_bytes_per_sec = config.bandwidth * (1024 ** 3)
         logger.info("Analytic backend ready: bandwidth=%.1f GB/s", config.bandwidth)
-
-    # ------------------------------------------------------------------
-    # Read-only bandwidth properties (all in B/s)
-    # ------------------------------------------------------------------
-
-    @property
-    def media_bandwidth(self) -> float:
-        """Media peak bandwidth in B/s."""
-        return self._media_bw_bps
-
-    @property
-    def transport_bandwidth(self) -> float | None:
-        """Configured transport bandwidth in B/s, or None if not set."""
-        return self._transport_bw_bps
-
-    @property
-    def effective_bandwidth(self) -> float:
-        """Effective peak bandwidth in B/s: min(media, transport)."""
-        if self._transport_bw_bps is None:
-            return self._media_bw_bps
-        return min(self._media_bw_bps, self._transport_bw_bps)
 
     def handler_mem_request(
         self, mem_req_list: List["MemoryRequest"]
@@ -92,7 +68,7 @@ class AnalyticMediaSystem(BaseMediaSystem):
             elif obj.req_type == MemoryRequestType.KWRITE:
                 num_write += 1
 
-        total_time = total_bytes / self.effective_bandwidth if self.effective_bandwidth > 0 else 0.0
+        total_time = total_bytes / self._bandwidth_bytes_per_sec
         metrics = MediaMetrics(
             num_read_requests=num_read,
             num_write_requests=num_write,
@@ -100,7 +76,7 @@ class AnalyticMediaSystem(BaseMediaSystem):
             cycles=0,
             num_media_reqs=len(mem_req_list),
             time=total_time,
-            bandwidth=self._media_bw_bps if total_time > 0 else 0.0,
+            bandwidth=self._bandwidth_bytes_per_sec if total_time > 0 else 0.0,
         )
 
         self.system_metrics.update_from_media(metrics)

@@ -133,49 +133,13 @@ class TestAnalyticMediaSystem(unittest.TestCase):
         self.assertIsNone(metrics.iops_read)
         self.assertIsNone(metrics.iops_write)
 
-    def test_transport_bandwidth_limits_effective(self):
-        """transport_bandwidth caps the effective bandwidth (min)."""
+    def test_bandwidth_bytes_per_sec(self):
+        """Bandwidth is converted from GB/s to B/s."""
         sys = AnalyticMediaSystem(MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
             bandwidth=400.0,
-            transport_bandwidth=100.0,
         ))
-        req = self._make_memory_request(0, 100 * 1024 ** 3, MemoryRequestType.KREAD)
-        metrics = sys.handler_mem_request([req])
-        # 100 GiB/s transport → time = 1 s
-        self.assertAlmostEqual(metrics.time, 1.0, places=6)
-
-    def test_transport_bandwidth_zero_means_no_limit(self):
-        """transport_bandwidth=0 (default) behaves like no transport config."""
-        req = self._make_memory_request(0, 100 * 1024 ** 3, MemoryRequestType.KREAD)
-        sys_default = AnalyticMediaSystem(MediaConfig(
-            media_type=MediaSystemBackend.ANALYTIC, bandwidth=100.0))
-        sys_explicit_zero = AnalyticMediaSystem(MediaConfig(
-            media_type=MediaSystemBackend.ANALYTIC,
-            bandwidth=100.0, transport_bandwidth=0.0))
-        self.assertEqual(
-            sys_default.handler_mem_request([req]).time,
-            sys_explicit_zero.handler_mem_request([req]).time,
-        )
-
-    def test_effective_bandwidth_properties(self):
-        """Read-only media/transport/effective bandwidth properties (B/s)."""
-        sys = AnalyticMediaSystem(MediaConfig(
-            media_type=MediaSystemBackend.ANALYTIC,
-            bandwidth=400.0,
-            transport_bandwidth=100.0,
-        ))
-        self.assertEqual(sys.media_bandwidth, 400.0 * 1024 ** 3)
-        self.assertEqual(sys.transport_bandwidth, 100.0 * 1024 ** 3)
-        self.assertEqual(sys.effective_bandwidth, 100.0 * 1024 ** 3)
-
-    def test_negative_transport_bandwidth_raises(self):
-        with self.assertRaises(ValueError):
-            MediaConfig(
-                media_type=MediaSystemBackend.ANALYTIC,
-                bandwidth=100.0,
-                transport_bandwidth=-1.0,
-            )
+        self.assertEqual(sys._bandwidth_bytes_per_sec, 400.0 * 1024 ** 3)
 
     def test_media_metrics_add_time_weights_rates(self):
         """Adding batches preserves rate fields instead of dropping them."""

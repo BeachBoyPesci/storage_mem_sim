@@ -4,12 +4,9 @@ import bisect
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from .memory_access import MemoryAccess
-from ..media.media_backend import MediaSystemBackend
-from .allocation_policy import AllocationPolicy
-from .event import Event
 
 if TYPE_CHECKING:
     from ..memory_config import MemoryEngineConfig
@@ -33,11 +30,9 @@ class MemoryPoolConfig:
 
     Attributes:
         instance_count: Number of instances (>= 1).
-        allocation_policy: Placement policy (default LEAST_ALLOCATED).
     """
 
     instance_count: int
-    allocation_policy: AllocationPolicy = AllocationPolicy.LEAST_ALLOCATED
 
     def __post_init__(self):
         if self.instance_count < 1:
@@ -61,65 +56,43 @@ class MemoryPool:
 
     def __init__(
         self,
-        engines: Sequence["MemoryEngine"],
-        *,
-        allocation_policy: AllocationPolicy = AllocationPolicy.LEAST_ALLOCATED,
+        instance_count: int,
+        engine_config: "MemoryEngineConfig",
     ):
-        if not engines:
-            raise ValueError("MemoryPool requires at least one engine")
-        if not all(
-            e.media_system.config.media_type is MediaSystemBackend.ANALYTIC
-            for e in engines
-        ):
+        """Build a pool of *instance_count* identical engines.
+
+        TODO(phase-2): support pluggable allocation policies
+        (LEAST_ALLOCATED, weighted, etc.).  Currently hard-coded to
+        ROUND_ROBIN.
+
+        TODO(phase-2): support heterogeneous instances (different
+        capacities / bandwidths per engine).
+        """
+        if instance_count < 1:
             raise ValueError(
-                "MemoryPool currently only supports the Analytic backend"
+                f"instance_count must be >= 1, got {instance_count}"
             )
 
-        self.allocation_policy = allocation_policy
-
-        # Fixed global address windows (cumulative capacity).
-        self._descs: List[_EngineDesc] = []
+        # Build engines.
+        self._engines: List[_EngineDesc] = []
         base = 0
-        for idx, engine in enumerate(engines):
+        for idx in range(instance_count):
+            cfg = dataclasses.replace(engine_config) if idx > 0 else engine_config
+            from ..memory_engine import MemoryEngine
+            engine = MemoryEngine(cfg)
             engine.instance_id = idx
             engine.global_base = base
-            self._descs.append(_EngineDesc(
+            self._engines.append(_EngineDesc(
                 engine=engine,
                 global_base=base,
                 capacity_bytes=engine.capacity_bytes,
             ))
             base += engine.capacity_bytes
 
-        self._bases = [d.global_base for d in self._descs]
+        self._bases = [d.global_base for d in self._engines]
         self._rr_counter = 0
 
         # TODO(phase-2): POOL scope — shared bandwidth across engines.
-
-    # ------------------------------------------------------------------
-    # Factory
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def from_homogeneous(
-        cls,
-        instance_count: int,
-        engine_config: "MemoryEngineConfig",
-        *,
-        allocation_policy: AllocationPolicy = AllocationPolicy.LEAST_ALLOCATED,
-    ) -> "MemoryPool":
-        """Build a pool of identical instances from one engine config."""
-        if instance_count < 1:
-            raise ValueError(
-                f"instance_count must be >= 1, got {instance_count}"
-            )
-        engines = [
-            _make_engine(dataclasses.replace(engine_config))
-            for _ in range(instance_count)
-        ]
-        return cls(
-            engines,
-            allocation_policy=allocation_policy,
-        )
 
     # ------------------------------------------------------------------
     # Accessors
@@ -128,16 +101,16 @@ class MemoryPool:
     @property
     def instances(self) -> tuple:
         """Tuple of the pool's MemoryEngine instances."""
-        return tuple(d.engine for d in self._descs)
+        return tuple(d.engine for d in self._engines)
 
     def get_engine(self, engine_id: int) -> "MemoryEngine":
         """Return the engine with the given instance id."""
-        if not 0 <= engine_id < len(self._descs):
+        if not 0 <= engine_id < len(self._engines):
             raise IndexError(
                 f"engine_id {engine_id} out of range for "
-                f"{len(self._descs)} instances"
+                f"{len(self._engines)} instances"
             )
-        return self._descs[engine_id].engine
+        return self._engines[engine_id].engine
 
     def resolve_engine(self, addr: int, size_bytes: int) -> "MemoryEngine":
         """Resolve a global address range to its owning engine."""
@@ -148,7 +121,7 @@ class MemoryPool:
         idx = bisect.bisect_right(self._bases, addr) - 1
         if idx < 0:
             raise ValueError(f"addr {addr} is below the first window (base=0)")
-        desc = self._descs[idx]
+        desc = self._engines[idx]
         end = addr + size_bytes
         if end > desc.global_base + desc.capacity_bytes:
             raise ValueError(
@@ -169,46 +142,52 @@ class MemoryPool:
         *,
         mem_engine_id: Optional[int] = None,
     ) -> int:
-        """Allocate a tensor and return its pool-global byte address."""
+        """Allocate a tensor and return its pool-global byte address.
+
+        Round-robin: start at the last-selected engine and scan forward,
+        picking the first one with enough remaining capacity.
+        """
         if size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {size_bytes}")
 
+        n = len(self._engines)
         if mem_engine_id is not None:
-            candidates = [self._descs[mem_engine_id]] \
-                if 0 <= mem_engine_id < len(self._descs) else []
-            if not candidates:
+            if not 0 <= mem_engine_id < n:
                 raise ValueError(
                     f"mem_engine_id {mem_engine_id} out of range for "
-                    f"{len(self._descs)} instances"
+                    f"{n} instances"
                 )
-        else:
-            candidates = list(self._descs)
+            desc = self._engines[mem_engine_id]
+            if desc.engine.remaining_capacity_bytes < self._aligned_size(desc.engine, size_bytes):
+                raise ValueError(
+                    f"engine {mem_engine_id}: remaining "
+                    f"{desc.engine.remaining_capacity_bytes} B < "
+                    f"aligned {size_bytes} B"
+                )
+            local_addr = desc.engine.get_tensor_addr(size_bytes)
+            return desc.global_base + local_addr
 
-        aligned = [self._aligned_size(d.engine, size_bytes) for d in candidates]
-        viable = [
-            (d, a) for d, a in zip(candidates, aligned)
-            if d.engine.remaining_capacity_bytes >= a
-        ]
-        if not viable:
-            detail = ", ".join(
-                f"engine {i}: capacity={d.capacity_bytes}, "
-                f"remaining={d.engine.remaining_capacity_bytes}"
-                for i, d in enumerate(self._descs)
-            )
-            raise ValueError(
-                f"no instance has remaining capacity >= aligned {size_bytes} "
-                f"B (aligned {aligned[0] if aligned else size_bytes} B); "
-                f"[{detail}]"
-            )
+        # Round-robin: scan from _rr_counter, pick first that fits.
+        # TODO(phase-2): pluggable allocation policies.
+        start = self._rr_counter % n
+        for offset in range(n):
+            idx = (start + offset) % n
+            desc = self._engines[idx]
+            aligned = self._aligned_size(desc.engine, size_bytes)
+            if desc.engine.remaining_capacity_bytes >= aligned:
+                self._rr_counter = (idx + 1) % n
+                local_addr = desc.engine.get_tensor_addr(size_bytes)
+                return desc.global_base + local_addr
 
-        if self.allocation_policy is AllocationPolicy.ROUND_ROBIN:
-            desc, _ = viable[self._rr_counter % len(viable)]
-            self._rr_counter += 1
-        else:
-            desc = min(viable, key=lambda dv: dv[0].engine.global_addr)[0]
-
-        local_addr = desc.engine.get_tensor_addr(size_bytes)
-        return desc.global_base + local_addr
+        detail = ", ".join(
+            f"engine {i}: capacity={d.capacity_bytes}, "
+            f"remaining={d.engine.remaining_capacity_bytes}"
+            for i, d in enumerate(self._engines)
+        )
+        raise ValueError(
+            f"no instance has remaining capacity >= aligned {size_bytes} B; "
+            f"[{detail}]"
+        )
 
     @staticmethod
     def _aligned_size(engine: "MemoryEngine", size_bytes: int) -> int:
@@ -219,24 +198,21 @@ class MemoryPool:
     # ------------------------------------------------------------------
 
     def submit(
-        self, event: Event,
+        self, access: MemoryAccess, *, now: float,
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Submit one arrival event; return [(rid, finish_time, metrics), ...].
+        """Submit one access; return [(rid, finish_time, metrics), ...].
 
-        Constructs a MemoryAccess from the event and forwards to the
-        resolved engine.  Pure routing — no event-queue logic.
+        Routes to the correct engine.  *access.is_finish* determines
+        whether this is an ARRIVAL (add request) or FINISH (remove +
+        reallocate).  Pure routing — no event-queue logic.
         """
-        access = MemoryAccess(
-            request_id=event.request_id,
-            source_id=event.source_id,
-            addr=event.addr,
-            size_bytes=event.size_bytes,
-            req_type=event.req_type,
-            mem_engine_id=event.mem_engine_id,
-        )
+        if access.is_finish:
+            engine = self.get_engine(access.mem_engine_id or 0)
+            return engine.submit(access, local_addr=0, now=now)
+
         engine = self._validate_access(access)
         local_addr = access.addr - engine.global_base
-        return engine.submit(access, local_addr=local_addr, now=event.time)
+        return engine.submit(access, local_addr=local_addr, now=now)
 
     def _validate_access(self, access: MemoryAccess) -> "MemoryEngine":
         """Validate the access and return its owning engine."""
@@ -251,8 +227,3 @@ class MemoryPool:
                 f"{access.mem_engine_id} was specified"
             )
         return engine
-
-def _make_engine(config: "MemoryEngineConfig") -> "MemoryEngine":
-    """Create a MemoryEngine, importing lazily to avoid import cycles."""
-    from ..memory_engine import MemoryEngine
-    return MemoryEngine(config)
