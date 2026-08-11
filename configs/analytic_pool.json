@@ -6,7 +6,6 @@
         "bandwidth": 400.0
     },
     "pool": {
-        "instances": 4,
-        "allocation_policy": "least_allocated"
+        "instances": 4
     }
 }
