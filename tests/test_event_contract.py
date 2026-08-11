@@ -109,19 +109,24 @@ class TestEventContract:
                 m.latency - m.standalone_time)
             assert m.contention_delay >= -1e-12
 
-    def test_event_sync_mixing_on_same_engine_raises(self):
+    def test_sync_and_event_can_interleave(self):
+        """Sync and event paths can be used on the same engine."""
         pool = _pool(1, _engine_config())
         addr = pool.get_tensor_addr(64, mem_engine_id=0)
-        # Use submit to lock engine to event mode.
+        engine = pool.get_engine(0)
+        # Sync first.
+        m = engine.issue_request([addr], [64], [MemoryRequestType.KREAD])
+        assert m.total_time > 0
+        # Then event.
         access = MemoryAccess(
             request_id="r1", source_id="s", addr=addr,
             size_bytes=64, req_type=MemoryRequestType.KREAD,
         )
-        pool.submit(access, now=0.0)
-        # Now sync issue_request() on the same engine must raise.
-        engine = pool.get_engine(0)
-        with pytest.raises(RuntimeError, match="locked"):
-            engine.issue_request([0], [64], [MemoryRequestType.KREAD])
+        entries = pool.submit(access, now=1.0)
+        assert len(entries) == 1
+        # Sync again.
+        m2 = engine.issue_request([addr], [64], [MemoryRequestType.KREAD])
+        assert m2.total_time > 0
 
 
 def test_import_boundary_no_des_in_pool():

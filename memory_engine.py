@@ -12,7 +12,7 @@ completion.
 
 import math
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .memory_type import MemoryRequestType
 from .memory_config import MemoryEngineConfig
@@ -51,8 +51,6 @@ class MemoryEngine:
 
         self.instance_id: int = 0
         self.global_base: int = 0
-        self._runtime_mode: Optional[str] = None
-
         # Event-driven state.
         self._active_requests: Dict[str, "ActiveMemoryRequest"] = {}
         self._last_update_time: float = 0.0
@@ -81,16 +79,6 @@ class MemoryEngine:
     @property
     def remaining_capacity_bytes(self) -> int:
         return max(0, self.capacity_bytes - self.global_addr)
-
-    def _enter_runtime_mode(self, mode: str) -> None:
-        if self._runtime_mode is None:
-            self._runtime_mode = mode
-            return
-        if self._runtime_mode != mode:
-            raise RuntimeError(
-                f"cannot use {mode!r} runtime mode: engine locked to "
-                f"{self._runtime_mode!r}"
-            )
 
     # ------------------------------------------------------------------
     # Address allocation
@@ -144,6 +132,9 @@ class MemoryEngine:
         memory_object = MemoryObject(addr, size, req_type, self.mem_config)
         return MemoryRequest(memory_object=memory_object)
 
+    # TODO: issue_request will be deprecated or substantially reworked
+    # in a future phase — the sync batch path overlaps with the event
+    # path conceptually and should be unified.
     def issue_request(
         self,
         addr: List[int],
@@ -158,7 +149,6 @@ class MemoryEngine:
         """
         if self.media_system is None:
             raise RuntimeError("No media_system configured.")
-        self._enter_runtime_mode("sync")
         n = len(addr)
         if len(size) != n or len(req_type) != n:
             raise ValueError("addr, size, req_type must have the same length")
@@ -212,7 +202,6 @@ class MemoryEngine:
         the completed request is removed and bandwidth is reallocated.
         Otherwise it is an ARRIVAL: a new request is added.
         """
-        self._enter_runtime_mode("event")
         self._advance(now)
         self._pop_finished()
 

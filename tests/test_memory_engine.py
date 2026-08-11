@@ -190,19 +190,15 @@ class TestMemoryEngineEventPort(unittest.TestCase):
             req_type=MemoryRequestType.KREAD,
         )
 
-    def test_sync_then_event_raises(self):
-        """issue_request locks sync mode; event submit afterwards raises."""
+    def test_sync_then_event_no_error(self):
+        """Sync and event paths can interleave without error."""
         self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
-        with self.assertRaises(RuntimeError):
-            self.engine.submit(self._access(), local_addr=0, now=0.0)
-
-    def test_event_then_sync_raises(self):
-        """Event submit locks event mode; issue_request afterwards raises."""
         self.engine.submit(self._access(), local_addr=0, now=0.0)
-        with self.assertRaises(RuntimeError):
-            self.engine.issue_request(
-                [0], [64], [MemoryRequestType.KREAD]
-            )
+
+    def test_event_then_sync_no_error(self):
+        """Event and sync paths can interleave without error."""
+        self.engine.submit(self._access(), local_addr=0, now=0.0)
+        self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
 
     def test_event_does_not_pollute_sync_metrics(self):
         """Event activity leaves the sync accumulator untouched."""
