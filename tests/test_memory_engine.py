@@ -186,11 +186,11 @@ class TestMemoryEngineEventPort(unittest.TestCase):
     def test_sync_then_event_no_error(self):
         """Sync and event paths can interleave without error."""
         self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
-        self.engine.submit(self._access(), local_addr=0, now=0.0)
+        self.engine.submit(self._access(), now=0.0)
 
     def test_event_then_sync_no_error(self):
         """Event and sync paths can interleave without error."""
-        self.engine.submit(self._access(), local_addr=0, now=0.0)
+        self.engine.submit(self._access(), now=0.0)
         self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
 
     def test_event_does_not_pollute_sync_metrics(self):
@@ -198,7 +198,7 @@ class TestMemoryEngineEventPort(unittest.TestCase):
         peak = 100.0 * (1024 ** 3)
         now = 64.0 / peak
         entries = self.engine.submit(
-            self._access(size_bytes=64), local_addr=0, now=now)
+            self._access(size_bytes=64), now=now)
         # Sync metrics should be untouched.
         em = self.engine.get_engine_metrics()
         self.assertEqual(em.total_bytes, 0)

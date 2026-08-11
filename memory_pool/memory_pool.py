@@ -208,11 +208,10 @@ class MemoryPool:
         """
         if request.is_finish:
             engine = self.get_engine(request.mem_engine_id or 0)
-            return engine.submit(request, local_addr=0, now=now)
+            return engine.submit(request, now=now)
 
         engine = self._validate_request(request)
-        local_addr = request.addr - engine.global_base
-        return engine.submit(request, local_addr=local_addr, now=now)
+        return engine.submit(request, now=now)
 
     def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":
         """Validate the request and return its owning engine."""

@@ -237,10 +237,7 @@ def main(argv=None):
     if args.des_schedule:
         # ---- discrete-event simulation mode ----
         if pool is None:
-            pool = MemoryPool.from_homogeneous(
-                instance_count=1,
-                engine_config=engine_cfg,
-            )
+            pool = MemoryPool(1, engine_cfg)
 
         with open(args.des_schedule) as f:
             entries = json.load(f)

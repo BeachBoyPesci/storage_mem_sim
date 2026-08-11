@@ -196,7 +196,6 @@ class MemoryEngine:
     def submit(
         self,
         request: "MemoryRequest",
-        local_addr: int,
         now: float,
     ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
         """Submit one access; return earliest-finishing predictions.
