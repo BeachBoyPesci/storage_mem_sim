@@ -5,7 +5,7 @@
         "capacity": 4.0,
         "bandwidth": 400.0
     },
-    "pool": {
+    "mem_pool": {
         "instances": 4
     }
 }

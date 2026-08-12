@@ -36,9 +36,9 @@ class TestSubmit:
         peak = 100.0 * _GIB
         entries = eng.submit(_access("r1", size=1000), now=0.0)
         assert len(entries) == 1
-        rid, ft, m = entries[0]
-        assert rid == "r1"
-        assert ft == pytest.approx(1000.0 / peak)
+        m = entries[0].metrics
+        assert m.request_id == "r1"
+        assert m.finish_time == pytest.approx(1000.0 / peak)
         assert m.contention_delay == pytest.approx(0.0, abs=1e-9)
 
     def test_two_simultaneous_equal_split(self):
@@ -47,8 +47,9 @@ class TestSubmit:
         eng.submit(_access("r1", size=1000), now=0.0)
         entries = eng.submit(_access("r2", size=1000), now=0.0)
         assert len(entries) == 2
-        for rid, ft, m in entries:
-            assert ft == pytest.approx(2000.0 / peak)
+        for req in entries:
+            m = req.metrics
+            assert m.finish_time == pytest.approx(2000.0 / peak)
             assert m.contention_delay > 0
 
     def test_returns_all_active(self):
@@ -65,7 +66,7 @@ class TestSubmit:
         eng.submit(_access("r1", size=100), now=0.0)
         entries = eng.submit(_access("r2", size=100), now=2 * 100.0 / peak)
         assert len(entries) == 1
-        assert entries[0][0] == "r2"
+        assert entries[0].metrics.request_id == "r2"
 
     def test_competition_returns_affected(self):
         """New arrival during active period → all affected returned."""
@@ -73,7 +74,7 @@ class TestSubmit:
         eng.submit(_access("r1", size=1000), now=0.0)
         entries = eng.submit(_access("r2", size=1000), now=0.0)
         assert len(entries) == 2
-        ids = {r[0] for r in entries}
+        ids = {req.metrics.request_id for req in entries}
         assert ids == {"r1", "r2"}
 
 
@@ -81,7 +82,7 @@ class TestMetrics:
     def test_metrics_on_predictions(self):
         eng = _engine()
         entries = eng.submit(_access("r1", size=500), now=0.0)
-        _, _, m = entries[0]
+        m = entries[0].metrics
         assert m.size == 500
         assert m.latency > 0
         assert m.average_bandwidth > 0
@@ -89,14 +90,14 @@ class TestMetrics:
     def test_contention_delay_zero_without_contention(self):
         eng = _engine()
         entries = eng.submit(_access("r1", size=1000), now=0.0)
-        assert entries[0][2].contention_delay == pytest.approx(0.0, abs=1e-9)
+        assert entries[0].metrics.contention_delay == pytest.approx(0.0, abs=1e-9)
 
     def test_contention_delay_positive_with_contention(self):
         eng = _engine()
         eng.submit(_access("r1", size=1000), now=0.0)
         entries = eng.submit(_access("r2", size=1000), now=0.0)
-        for _, _, m in entries:
-            assert m.contention_delay > 0
+        for req in entries:
+            assert req.metrics.contention_delay > 0
 
 
 class TestInvariants:
@@ -109,7 +110,7 @@ class TestInvariants:
         # All at t=0 with equal split: each gets peak/4.
         # 500 / (peak/4) = 2000/peak = total_bytes / peak.
         assert entries is not None
-        max_ft = max(ft for _, ft, _ in entries)
+        max_ft = max(req.metrics.finish_time for req in entries)
         assert max_ft == pytest.approx(2000.0 / peak)
 
     def test_remaining_bytes_non_negative(self):

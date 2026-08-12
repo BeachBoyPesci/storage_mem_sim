@@ -204,7 +204,7 @@ class TestMemoryEngineEventPort(unittest.TestCase):
         self.assertEqual(em.total_bytes, 0)
         # Event submit returns prediction with metrics.
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0][2].size, 64)
+        self.assertEqual(entries[0].metrics.size, 64)
 
 
 class TestMemoryEngineConfig(unittest.TestCase):

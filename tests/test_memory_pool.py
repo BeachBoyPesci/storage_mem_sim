@@ -36,8 +36,8 @@ def _engine_config(capacity=1.0, bandwidth=100.0):
 
 def _pool(instance_count=2, capacity=1.0, bandwidth=100.0, **kwargs):
     return MemoryPool(
-        instance_count,
         _engine_config(capacity=capacity, bandwidth=bandwidth),
+        instance_count,
         **kwargs,
     )
 
@@ -120,15 +120,15 @@ class TestPoolSubmitRouting:
         pool = _pool(instance_count=2, capacity=1.0)
         e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
         e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
-        assert e1[0][0] == "r1"
-        assert e2[0][0] == "r2"
+        assert e1[0].metrics.request_id == "r1"
+        assert e2[0].metrics.request_id == "r2"
 
     def test_submit_returns_predictions(self):
         pool = _pool(instance_count=2, capacity=1.0)
         entries = pool.submit(_access("r1", _GIB, 1000), now=0.0)
         assert len(entries) == 1
-        rid, ft, m = entries[0]
-        assert rid == "r1"
+        m = entries[0].metrics
+        assert m.request_id == "r1"
         assert m.size == 1000
 
     def test_engine_scope_instances_independent(self):
@@ -137,7 +137,7 @@ class TestPoolSubmitRouting:
         e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
         e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
         # Different engines: each gets full bandwidth, same finish time.
-        assert e1[0][1] == pytest.approx(e2[0][1])
+        assert e1[0].metrics.finish_time == pytest.approx(e2[0].metrics.finish_time)
 
 
 class TestPoolFactory:
@@ -152,7 +152,7 @@ class TestPoolFactory:
 
     def test_requires_at_least_one_engine(self):
         with pytest.raises(ValueError, match="instance_count must be >= 1"):
-            MemoryPool(0, _engine_config())
+            MemoryPool(_engine_config(), 0)
 
     def test_pool_config_defaults(self):
         config = MemoryPoolConfig(instance_count=2)

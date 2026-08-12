@@ -57,8 +57,8 @@ class MemoryPool:
 
     def __init__(
         self,
-        instance_count: int,
         engine_config: "MemoryEngineConfig",
+        instance_count: int = 1,
     ):
         """Build a pool of *instance_count* identical engines.
 
@@ -201,17 +201,8 @@ class MemoryPool:
 
     def submit(
         self, request: MemoryRequest, *, now: float,
-    ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Submit one request; return [(rid, finish_time, metrics), ...].
-
-        Routes to the correct engine.  *request.is_finish* determines
-        whether this is an ARRIVAL (add request) or FINISH (remove +
-        reallocate).  Pure routing — no event-queue logic.
-        """
-        if request.is_finish:
-            engine = self.get_engine(request.mem_engine_id or 0)
-            return engine.submit(request, now=now)
-
+    ) -> List["MemoryRequest"]:
+        """Submit an ARRIVAL; return earliest-finishing requests."""
         if request.req_type == MemoryRequestType.KWRITE:
             if request.addr is not None:
                 raise ValueError(
@@ -224,6 +215,12 @@ class MemoryPool:
         else:
             engine = self._validate_request(request)
         return engine.submit(request, now=now)
+
+    def finish(
+        self, rid: str, engine_id: int, now: float,
+    ) -> List["MemoryRequest"]:
+        """Handle a FINISH event: forward to the owning engine."""
+        return self.get_engine(engine_id).finish(rid, now)
 
     def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":
         """Validate the request and return its owning engine."""

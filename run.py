@@ -94,7 +94,7 @@ def main(argv=None):
     request_size = args.size or mc.get("request_size", 512 * 8)
 
     # ---- pool settings (optional) ----
-    pool_block = raw.get("pool", {})
+    pool_block = raw.get("mem_pool", {})
     instances = pool_block.get("instances", mc.get("instances", 1))
     if args.des_schedule and backend is not MediaSystemBackend.ANALYTIC:
         raise ValueError(
@@ -143,7 +143,7 @@ def main(argv=None):
     # ---- build engine or pool ----
     use_pool = instances > 1
     if use_pool:
-        pool = MemoryPool(instances, engine_cfg)
+        pool = MemoryPool(engine_cfg, instances)
         engine = pool.instances[0]
         ms = engine.media_system
         tx_bytes = getattr(ms, '_tx_bytes', request_size)
@@ -237,7 +237,7 @@ def main(argv=None):
     if args.des_schedule:
         # ---- discrete-event simulation mode ----
         if pool is None:
-            pool = MemoryPool(1, engine_cfg)
+            pool = MemoryPool(engine_cfg)
 
         with open(args.des_schedule) as f:
             entries = json.load(f)

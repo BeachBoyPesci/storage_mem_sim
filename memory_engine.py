@@ -28,18 +28,6 @@ from dataclasses import dataclass
 
 
 @dataclass
-class _ActiveRequest:
-    """Mutable state of one in-flight request in the engine."""
-
-    request_id: str
-    source_id: str
-    mem_engine_id: int
-    arrival_time: float
-    remaining_bytes: float
-    size_bytes: int
-    allocated_bandwidth: float = 0.0
-
-
 class MemoryEngine:
     """Single physical media instance.
 
@@ -67,7 +55,7 @@ class MemoryEngine:
         self.instance_id: int = 0
         self.global_base: int = 0
         # Event-driven state.
-        self._active_requests: Dict[str, "_ActiveRequest"] = {}
+        self._active_requests: Dict[str, "MemoryRequest"] = {}
         self._last_update_time: float = 0.0
 
         if mem_config.media_config is None:
@@ -197,40 +185,36 @@ class MemoryEngine:
         self,
         request: "MemoryRequest",
         now: float,
-    ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Submit one access; return earliest-finishing predictions.
-
-        If *request.is_finish* is True, this is a FINISH callback:
-        the completed request is removed and bandwidth is reallocated.
-        Otherwise it is an ARRIVAL: a new request is added.
-        """
+    ) -> List["MemoryRequest"]:
+        """Submit an ARRIVAL; return earliest-finishing requests."""
         self._advance(now)
         self._pop_finished()
 
-        if request.is_finish:
-            # Only the earliest-finishing request(s) hold a FINISH event.
-            # A sibling callback (same time) may have already popped this
-            # request via _pop_finished — that is expected and harmless.
-            if request.request_id in self._active_requests:
-                self._active_requests.pop(request.request_id)
-        else:
-            if request.request_id in self._active_requests:
-                raise ValueError(
-                    f"request_id {request.request_id!r} is already active"
-                )
-            self._active_requests[request.request_id] = _ActiveRequest(
-                request_id=request.request_id,
-                source_id=request.source_id,
-                mem_engine_id=request.mem_engine_id or self.instance_id,
-                arrival_time=now,
-                remaining_bytes=float(request.size),
-                size_bytes=request.size,
+        if request.request_id in self._active_requests:
+            raise ValueError(
+                f"request_id {request.request_id!r} is already active"
             )
+        request.arrival_time = now
+        request.remaining_bytes = float(request.size)
+        request.allocated_bandwidth = 0.0
+        if request.mem_engine_id is None:
+            request.mem_engine_id = self.instance_id
+        self._active_requests[request.request_id] = request
 
         self._reallocate()
+        return self._build_results(self._predict_earliest(now))
 
-        predictions = self._predict_earliest(now)
-        return self._build_results(predictions)
+    def finish(
+        self, rid: str, now: float,
+    ) -> List["MemoryRequest"]:
+        """Handle a FINISH event: remove *rid*, reallocate, re-predict."""
+        self._advance(now)
+        self._pop_finished()
+        # A sibling callback (same time) may have already popped this.
+        if rid in self._active_requests:
+            self._active_requests.pop(rid)
+        self._reallocate()
+        return self._build_results(self._predict_earliest(now))
 
     # ------------------------------------------------------------------
     # Internal helpers (called in submit order)
@@ -291,29 +275,29 @@ class MemoryEngine:
 
     def _build_results(
         self, predictions: List[Tuple[str, float]],
-    ) -> List[Tuple[str, float, "MemoryRequestMetrics"]]:
-        """Wrap ``[(rid, ft), ...]`` with MemoryRequestMetrics."""
+    ) -> List["MemoryRequest"]:
+        """Attach MemoryRequestMetrics to each request and return the list."""
         from .memory_pool.request_metrics import MemoryRequestMetrics
 
         effective_bw = self.media_system._bandwidth_bytes_per_sec
-        result: List[Tuple[str, float, MemoryRequestMetrics]] = []
+        result: List["MemoryRequest"] = []
         for rid, ft in predictions:
             req = self._active_requests[rid]
             latency = ft - req.arrival_time
-            standalone = req.size_bytes / effective_bw if effective_bw > 0 else float("inf")
-            m = MemoryRequestMetrics(
+            standalone = req.size / effective_bw if effective_bw > 0 else float("inf")
+            req.metrics = MemoryRequestMetrics(
                 request_id=rid,
                 source_id=req.source_id,
                 mem_engine_id=req.mem_engine_id,
                 arrival_time=req.arrival_time,
                 finish_time=ft,
-                size=req.size_bytes,
+                size=req.size,
                 latency=latency,
                 standalone_time=standalone,
                 contention_delay=latency - standalone,
                 average_bandwidth=(
-                    req.size_bytes / latency if latency > 0 else 0.0
+                    req.size / latency if latency > 0 else 0.0
                 ),
             )
-            result.append((rid, ft, m))
+            result.append(req)
         return result

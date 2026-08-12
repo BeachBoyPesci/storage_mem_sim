@@ -28,7 +28,9 @@ class SimpleSimulator:
         self._events: List[Tuple[float, int, "Event"]] = []
         self._seq = 0
         self._scheduled_count = 0
+        self._stale_count = 0
         self._request_metrics: List[MemoryRequestMetrics] = []
+        self._latest_finish: Dict[str, float] = {}
 
     def schedule_arrival(
         self,
@@ -49,12 +51,14 @@ class SimpleSimulator:
         pool = self._memory_pool
 
         def _on_arrival() -> None:
+            # TODO: support dispatching multiple MemoryRequests from a
+            # single arrival event (e.g. read + write, or multi-address
+            # scatter/gather).  Currently one event → one request.
             request = MemoryRequest(
                 addr, size_bytes, req_type,
                 request_id=request_id,
                 source_id=source_id,
                 mem_engine_id=engine_id,
-                is_finish=False,
             )
             self._refresh_finish_events(
                 pool.submit(request, now=time),
@@ -68,6 +72,10 @@ class SimpleSimulator:
         """Process the event queue until empty."""
         while self._events:
             event = heapq.heappop(self._events)[2]
+            if (event.metrics is not None
+                    and event.time != self._latest_finish.get(event.request_id)):
+                self._stale_count += 1
+                continue
             event.callback()
 
         makespan = 0.0
@@ -91,7 +99,7 @@ class SimpleSimulator:
             },
             makespan=makespan,
             scheduled_finish_events=self._scheduled_count,
-            stale_finish_events=0,
+            stale_finish_events=self._stale_count,
         )
 
     # ------------------------------------------------------------------
@@ -107,33 +115,22 @@ class SimpleSimulator:
         """Replace stale FINISH events and create new ones."""
         pool = self._memory_pool
 
-        for request_id, finish_time, metrics in entries:
-            # Remove old FINISH: scan, pop, restore heap.
-            for i in range(len(self._events)):
-                ev = self._events[i][2]
-                if ev.metrics is not None and ev.request_id == request_id:
-                    self._events[i] = self._events[-1]
-                    self._events.pop()
-                    if i < len(self._events):
-                        heapq._siftup(self._events, i)
-                        heapq._siftdown(self._events, 0, i)
-                    break
+        for req in entries:
+            m = req.metrics
+            rid = m.request_id
+            ft = m.finish_time
+            # Record latest prediction — old FINISH events for this rid
+            # are now stale and will be skipped on pop.
+            self._latest_finish[rid] = ft
 
-            def _on_finish() -> None:
-                if metrics is not None:
-                    self._request_metrics.append(metrics)
-                request = MemoryRequest(
-                    None, metrics.size, MemoryRequestType.KREAD,
-                    request_id=request_id,
-                    source_id=metrics.source_id,
-                    mem_engine_id=metrics.mem_engine_id,
-                    is_finish=True,
-                )
+            def _on_finish(_m=m, _rid=rid, _ft=ft) -> None:
+                if _m is not None:
+                    self._request_metrics.append(_m)
                 self._refresh_finish_events(
-                    pool.submit(request, now=finish_time),
+                    pool.finish(_rid, _m.mem_engine_id, _ft),
                 )
 
             self._push_event(Event(
-                time=finish_time, callback=_on_finish,
-                request_id=request_id, metrics=metrics,
+                time=ft, callback=_on_finish,
+                request_id=rid, metrics=m,
             ))

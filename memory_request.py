@@ -11,6 +11,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .memory_config import MemoryEngineConfig
+    from .memory_pool.request_metrics import MemoryRequestMetrics
     from .media.media_request import MediaRequest
 from .memory_type import MemoryRequestType
 
@@ -35,7 +36,12 @@ class MemoryRequest:
     request_id: str = ""
     source_id: str = ""
     mem_engine_id: Optional[int] = None
-    is_finish: bool = False
+
+    # Engine mutable state (event path).
+    arrival_time: float = 0.0
+    remaining_bytes: float = 0.0
+    allocated_bandwidth: float = 0.0
+    metrics: Optional["MemoryRequestMetrics"] = None
 
     def __init__(
         self,
@@ -47,7 +53,6 @@ class MemoryRequest:
         request_id: str = "",
         source_id: str = "",
         mem_engine_id: Optional[int] = None,
-        is_finish: bool = False,
     ):
         if addr is not None and addr < 0:
             raise ValueError(f"addr must be >= 0 or None, got {addr}")
@@ -60,5 +65,4 @@ class MemoryRequest:
         self.request_id = request_id
         self.source_id = source_id
         self.mem_engine_id = mem_engine_id
-        self.is_finish = is_finish
 

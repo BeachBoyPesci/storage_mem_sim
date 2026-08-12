@@ -16,7 +16,7 @@ _GIB = 1024 ** 3
 
 
 def _pool(instance_count, engine_config, **kwargs):
-    return MemoryPool(instance_count, engine_config, **kwargs)
+    return MemoryPool(engine_config, instance_count, **kwargs)
 
 
 class TestEventContract:
