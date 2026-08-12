@@ -1,6 +1,12 @@
 [
     {"time": 0.0, "source_id": "prefill-0", "size_bytes": 1000},
-    {"time": 0.0, "source_id": "prefill-1", "size_bytes": 2000},
-    {"time": 500e-9, "source_id": "prefill-0", "size_bytes": 1000},
-    {"time": 1000e-9, "source_id": "prefill-1", "size_bytes": 500}
+    {"time": 1e-9, "source_id": "prefill-1", "size_bytes": 2000},
+    {"time": 2e-9, "source_id": "prefill-0", "size_bytes": 500},
+    {"time": 3e-9, "source_id": "prefill-1", "size_bytes": 1500},
+    {"time": 4e-9, "source_id": "prefill-0", "size_bytes": 2000},
+    {"time": 5e-9, "source_id": "prefill-2", "size_bytes": 1000},
+    {"time": 6e-9, "source_id": "prefill-1", "size_bytes": 500},
+    {"time": 7e-9, "source_id": "prefill-2", "size_bytes": 2000},
+    {"time": 8e-9, "source_id": "prefill-0", "size_bytes": 1000},
+    {"time": 9e-9, "source_id": "prefill-2", "size_bytes": 1500}
 ]

@@ -102,10 +102,6 @@ class SimpleSimulator:
             stale_finish_events=self._stale_count,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _push_event(self, event: Event) -> None:
         self._seq += 1
         object.__setattr__(event, 'seq', self._seq)

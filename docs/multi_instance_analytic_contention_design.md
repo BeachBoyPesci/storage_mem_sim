@@ -575,6 +575,24 @@ Engine 只维护同步路径的 `MemoryEngineMetrics`（`issue_request` 的累�
 
 Pool 和 Engine 都不维护事件路径的累计计数器（`MemoryPoolMetrics`、`EngineEventMetrics`、`BandwidthAllocation` 均已删除）。
 
+### 10.4 结果输出
+
+`SimulationResult` 提供两个导出方法：
+
+```python
+result = sim.run()
+result.save_json("output/des_result.json")   # 机器可读
+result.save_html("output/des_result.html")   # 可视化报告
+```
+
+`output/` 目录已加入 `.gitignore`。HTML 报告自包含，双击浏览器直接查看：
+
+- **概览卡片**：makespan、请求数、stale 事件数
+- **Gantt 图**：按 engine 分组，显示每个请求的到达/完成时间线，绿色=standalone，橙色=contention
+- **Latency Breakdown 柱状图**：standalone_time 和 contention_delay 堆叠
+- **Per-Source 汇总表**：avg_latency、total_bytes、count
+- **悬停工具**：鼠标悬停显示 arrival_time、finish_time、latency、standalone、contention
+
 ## 11. 对当前代码的改动
 
 ### 11.1 `memory_engine.py`

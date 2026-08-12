@@ -285,6 +285,15 @@ def main(argv=None):
                 f"bw={m.average_bandwidth/1e9:.2f}GB/s"
             )
 
+        # ---- save output ----
+        _out_dir = os.path.join(os.path.dirname(__file__), "output")
+        _json_path = os.path.join(_out_dir, "des_result.json")
+        _html_path = os.path.join(_out_dir, "des_result.html")
+        result.save_json(_json_path)
+        result.save_html(_html_path)
+        print(f"\nJSON: {_json_path}")
+        print(f"HTML: {_html_path}")
+
     elif generated_workload is not None:
         metrics = generated_workload.issue(pool if use_pool else engine)
     else:
