@@ -1,502 +1,252 @@
 [
   {
-    "time": 1.0517130003529441e-09,
-    "source_id": "prefill-1",
+    "time": 1.960363e-09,
+    "source_id": "prefill-0",
     "size_bytes": 8000
   },
   {
-    "time": 2.8582636453741545e-09,
-    "source_id": "decode-1",
-    "size_bytes": 8000
-  },
-  {
-    "time": 2.896258324709378e-09,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 3.4260666351896174e-09,
-    "source_id": "prefill-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 3.5428674944326723e-09,
-    "source_id": "prefill-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 3.940009903922909e-09,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 4.6372921690073954e-09,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 4.7162898245941116e-09,
-    "source_id": "decode-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 5.577608679793822e-09,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 6.61559243625125e-09,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 7.143579522103134e-09,
-    "source_id": "prefill-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 7.642065967413054e-09,
+    "time": 2.980058e-09,
     "source_id": "prefill-1",
     "size_bytes": 4000
   },
   {
-    "time": 7.772395488749523e-09,
+    "time": 3.033471e-09,
     "source_id": "decode-0",
     "size_bytes": 8000
   },
   {
-    "time": 9.494893363381858e-09,
-    "source_id": "prefill-1",
-    "size_bytes": 500
-  },
-  {
-    "time": 9.614429512832996e-09,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 9.941882534332425e-09,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.0212959971176823e-08,
-    "source_id": "decode-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.0531482740347154e-08,
-    "source_id": "decode-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.0931898740180168e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 1.0966037957864167e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 8000
-  },
-  {
-    "time": 1.0980758698513449e-08,
-    "source_id": "decode-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.1010869222577974e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.144708919055772e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.145240359820522e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.2244592690173811e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.2395280683300398e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.2432816696014282e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 8000
-  },
-  {
-    "time": 1.257070599909066e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.3223296074356384e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 1.3280725626567691e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.3898680155504606e-08,
-    "source_id": "decode-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.3927257233347026e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.4968937609998896e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.6207802850233655e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 1.7012525825899597e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 1.84763544369442e-08,
+    "time": 3.367381e-09,
     "source_id": "prefill-1",
     "size_bytes": 4000
   },
   {
-    "time": 1.8509048355844135e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.8695692629557402e-08,
-    "source_id": "prefill-1",
+    "time": 4.092751e-09,
+    "source_id": "decode-0",
     "size_bytes": 8000
   },
   {
-    "time": 1.8948655948845807e-08,
-    "source_id": "decode-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 1.994961499987146e-08,
-    "source_id": "decode-0",
-    "size_bytes": 4000
-  },
-  {
-    "time": 2.005823935111645e-08,
+    "time": 4.706502e-09,
     "source_id": "prefill-0",
-    "size_bytes": 1000
+    "size_bytes": 8000
   },
   {
-    "time": 2.013106410511344e-08,
-    "source_id": "decode-0",
-    "size_bytes": 500
+    "time": 4.871529e-09,
+    "source_id": "prefill-0",
+    "size_bytes": 8000
   },
   {
-    "time": 2.0188777565913874e-08,
+    "time": 6.190098e-09,
     "source_id": "prefill-1",
     "size_bytes": 8000
   },
   {
-    "time": 2.03207028976236e-08,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 2.1096090984263522e-08,
+    "time": 7.212754e-09,
     "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.1150374299508145e-08,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 2.117893115099604e-08,
-    "source_id": "decode-1",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.1421691364728988e-08,
-    "source_id": "decode-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 2.215653725267285e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.2430677391656597e-08,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 2.246045231419268e-08,
-    "source_id": "decode-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.2686185316460322e-08,
-    "source_id": "decode-0",
     "size_bytes": 8000
   },
   {
-    "time": 2.2861228628522602e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.291427613092931e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.311301059255579e-08,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 2.467579174448155e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 2.63836893709127e-08,
-    "source_id": "decode-1",
+    "time": 7.546045e-09,
+    "source_id": "prefill-1",
     "size_bytes": 1000
   },
   {
-    "time": 2.6881720205081366e-08,
-    "source_id": "decode-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 2.895901454081281e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 2.9725957676672063e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 4000
-  },
-  {
-    "time": 2.9794421418056407e-08,
-    "source_id": "decode-1",
-    "size_bytes": 8000
-  },
-  {
-    "time": 2.9820451536598694e-08,
+    "time": 7.599227e-09,
     "source_id": "decode-1",
     "size_bytes": 4000
   },
   {
-    "time": 3.174891440985302e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 3.197133992289419e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 3.26072446999261e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 3.2771933264744005e-08,
+    "time": 8.318314e-09,
     "source_id": "decode-1",
-    "size_bytes": 4000
-  },
-  {
-    "time": 3.2868658223626126e-08,
-    "source_id": "decode-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 3.306316592838551e-08,
-    "source_id": "decode-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 3.344888891481403e-08,
-    "source_id": "prefill-1",
     "size_bytes": 8000
   },
   {
-    "time": 3.366822736466508e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 3.383497437114557e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 3.408551845132874e-08,
-    "source_id": "decode-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 3.437485644006653e-08,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 3.509101567292757e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 3.64865893346909e-08,
+    "time": 1.0734909e-08,
     "source_id": "prefill-0",
     "size_bytes": 4000
   },
   {
-    "time": 3.659537974223139e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 3.724944910458033e-08,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 3.794036835648837e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 4000
-  },
-  {
-    "time": 3.8098109952603236e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 2000
-  },
-  {
-    "time": 3.829172146534939e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 4000
-  },
-  {
-    "time": 3.923097121453767e-08,
-    "source_id": "decode-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 4.168724773199036e-08,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 4.208346740862336e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 1000
-  },
-  {
-    "time": 4.237471831737299e-08,
-    "source_id": "decode-0",
-    "size_bytes": 500
-  },
-  {
-    "time": 4.276588605075735e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 4000
-  },
-  {
-    "time": 4.323251970151078e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 4.427258739684035e-08,
-    "source_id": "decode-0",
-    "size_bytes": 8000
-  },
-  {
-    "time": 4.4980704232147275e-08,
-    "source_id": "decode-1",
-    "size_bytes": 500
-  },
-  {
-    "time": 4.565680620927725e-08,
+    "time": 1.0910389e-08,
     "source_id": "decode-0",
     "size_bytes": 1000
   },
   {
-    "time": 4.596935654160376e-08,
+    "time": 1.1597843e-08,
     "source_id": "prefill-1",
     "size_bytes": 500
   },
   {
-    "time": 4.631834915040638e-08,
+    "time": 1.3891957e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 4000
+  },
+  {
+    "time": 1.4096536e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 4000
+  },
+  {
+    "time": 1.4396888e-08,
+    "source_id": "prefill-0",
+    "size_bytes": 500
+  },
+  {
+    "time": 1.498835e-08,
     "source_id": "prefill-1",
     "size_bytes": 1000
   },
   {
-    "time": 4.6325903677966666e-08,
+    "time": 1.5424091e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 1.6191638e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 4000
+  },
+  {
+    "time": 1.9948942e-08,
+    "source_id": "prefill-0",
+    "size_bytes": 4000
+  },
+  {
+    "time": 2.0908608e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 2.3280093e-08,
     "source_id": "decode-1",
     "size_bytes": 2000
   },
   {
-    "time": 4.6445674650108845e-08,
+    "time": 2.4248137e-08,
     "source_id": "prefill-1",
     "size_bytes": 2000
   },
   {
-    "time": 4.645493081323085e-08,
+    "time": 2.4755818e-08,
+    "source_id": "decode-0",
+    "size_bytes": 4000
+  },
+  {
+    "time": 2.5596642e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 2000
+  },
+  {
+    "time": 2.6729548e-08,
     "source_id": "decode-0",
     "size_bytes": 1000
   },
   {
-    "time": 4.666296889968546e-08,
-    "source_id": "prefill-0",
-    "size_bytes": 1000
-  },
-  {
-    "time": 4.7342433985249544e-08,
-    "source_id": "prefill-1",
-    "size_bytes": 2000
-  },
-  {
-    "time": 4.7674987382675146e-08,
+    "time": 2.7552363e-08,
     "source_id": "prefill-0",
     "size_bytes": 8000
   },
   {
-    "time": 4.786065361033906e-08,
+    "time": 2.8651297e-08,
+    "source_id": "decode-0",
+    "size_bytes": 2000
+  },
+  {
+    "time": 2.9080008e-08,
+    "source_id": "prefill-1",
+    "size_bytes": 2000
+  },
+  {
+    "time": 3.0545977e-08,
+    "source_id": "decode-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 3.1714478e-08,
+    "source_id": "prefill-0",
+    "size_bytes": 1000
+  },
+  {
+    "time": 3.2546724e-08,
+    "source_id": "prefill-0",
+    "size_bytes": 8000
+  },
+  {
+    "time": 3.4019999e-08,
+    "source_id": "decode-1",
+    "size_bytes": 2000
+  },
+  {
+    "time": 3.4524683e-08,
+    "source_id": "prefill-0",
+    "size_bytes": 4000
+  },
+  {
+    "time": 3.4764768e-08,
+    "source_id": "decode-1",
+    "size_bytes": 8000
+  },
+  {
+    "time": 3.583139e-08,
     "source_id": "decode-0",
     "size_bytes": 500
   },
   {
-    "time": 4.803894516372252e-08,
+    "time": 3.6918169e-08,
+    "source_id": "decode-1",
+    "size_bytes": 4000
+  },
+  {
+    "time": 3.9844599e-08,
     "source_id": "prefill-0",
+    "size_bytes": 500
+  },
+  {
+    "time": 4.2923423e-08,
+    "source_id": "decode-0",
+    "size_bytes": 4000
+  },
+  {
+    "time": 4.3199223e-08,
+    "source_id": "decode-0",
+    "size_bytes": 4000
+  },
+  {
+    "time": 4.4976651e-08,
+    "source_id": "decode-1",
+    "size_bytes": 4000
+  },
+  {
+    "time": 4.5840811e-08,
+    "source_id": "decode-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 4.7032428e-08,
+    "source_id": "decode-0",
     "size_bytes": 1000
   },
   {
-    "time": 4.919266551257412e-08,
+    "time": 4.7234055e-08,
+    "source_id": "decode-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 4.7385447e-08,
+    "source_id": "decode-1",
+    "size_bytes": 500
+  },
+  {
+    "time": 4.8812755e-08,
     "source_id": "prefill-0",
     "size_bytes": 8000
+  },
+  {
+    "time": 4.9323354e-08,
+    "source_id": "decode-1",
+    "size_bytes": 1000
+  },
+  {
+    "time": 4.9654797e-08,
+    "source_id": "decode-1",
+    "size_bytes": 2000
   }
 ]
