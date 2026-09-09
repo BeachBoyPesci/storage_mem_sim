@@ -2,7 +2,7 @@
 
 import heapq
 import logging
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from ..memory_request import MemoryRequest
 from ..memory_pool import MemoryRequestMetrics
@@ -31,6 +31,12 @@ class SimpleSimulator:
         self._stale_count = 0
         self._request_metrics: List[MemoryRequestMetrics] = []
         self._latest_finish: Dict[str, float] = {}
+        # Rids whose completion metrics were already recorded.  Required for
+        # correctness, not just defense: _latest_finish oscillation
+        # (ft -> ft' -> ft) can leave two same-time events for one rid on the
+        # heap, and the stale check in run() cannot tell same-time copies
+        # apart — the second fire would double-count without this set.
+        self._recorded: Set[str] = set()
 
     def schedule_arrival(
         self,
@@ -108,20 +114,44 @@ class SimpleSimulator:
         heapq.heappush(self._events, (event.time, event.seq, event))
 
     def _refresh_finish_events(self, entries: list) -> None:
-        """Replace stale FINISH events and create new ones."""
-        pool = self._memory_pool
+        """Schedule FINISH events for a full prediction snapshot.
 
-        for req in entries:
-            m = req.metrics
+        *entries* is every active request returned by ``pool.submit``/
+        ``pool.finish`` (empty = idle).  An entry whose finish time equals
+        the latest prediction for its rid is skipped: an identical event is
+        already queued, and pushing a duplicate would fire twice at the same
+        time and double-report the completion.  Predictions at *different*
+        times replace the old event lazily — the old one stays in the heap
+        and is skipped on pop (stale check in ``run()``).
+
+        Because every engine state change returns the full snapshot, every
+        queued event equals its request's latest prediction, so an event
+        fires exactly at the request's true completion.  The simulator never
+        needs to second-guess a completion — stale-skipping above is the only
+        validity check.
+        """
+        pool = self._memory_pool
+        for entry in entries:
+            m = entry.metrics
             rid = m.request_id
             ft = m.finish_time
+            if self._latest_finish.get(rid) == ft:
+                # Identical event already queued — dedupe.
+                continue
             # Record latest prediction — old FINISH events for this rid
             # are now stale and will be skipped on pop.
             self._latest_finish[rid] = ft
 
             def _on_finish(_m=m, _rid=rid, _ft=ft) -> None:
-                if _m is not None:
+                # The event fired at the request's latest prediction — a
+                # true completion.  Record the metrics captured at
+                # scheduling (_recorded guards same-rid same-time copies
+                # created by finish-time oscillation).
+                if _m is not None and _rid not in self._recorded:
                     self._request_metrics.append(_m)
+                    self._recorded.add(_rid)
+                # The engine popped the request; refresh from the snapshot
+                # of the survivors (may be empty).
                 self._refresh_finish_events(
                     pool.finish(_rid, _m.mem_engine_id, _ft),
                 )

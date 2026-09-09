@@ -1,4 +1,4 @@
-"""Contract tests for the pool event API (§13.5 of the design doc)."""
+"""Contract tests for the pool event API (§12.5 of the design doc)."""
 
 import os
 import subprocess

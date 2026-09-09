@@ -27,7 +27,7 @@
 
 - `MemoryEngine`：单个物理介质实例，持有带宽竞争状态（`active_requests`、`last_update_time`、均分带宽）。预测采用**静态公式**（`now + remaining / allocated_bw`），精确度由 FINISH 回调修正。不维护预测缓存或事件指标。
 - `MemoryPool`：多实例地址和路由管理层。`submit(request, now)` 处理 ARRIVAL，`finish(rid, engine_id, now)` 处理 FINISH 回调。不 import `Event`。
-- `SimpleSimulator`：事件堆管理 + 最终统计。ARRIVAL 调 `pool.submit()`，FINISH 调 `pool.finish()`。**只有最早完成的请求持有 FINISH 事件**。
+- `SimpleSimulator`：事件堆管理 + 最终统计。ARRIVAL 调 `pool.submit()`，FINISH 调 `pool.finish()`。每次状态变更用返回的**全量预测快照**刷新所有 FINISH 事件，事件触发即真完成（stale-skip 丢弃被取代的旧事件）。
 
 ### 2.2 从 MemoryEngine 移出的职责
 
@@ -107,7 +107,7 @@ flowchart TB
 
 | 模块 | 核心职责 | 不负责的内容 |
 | --- | --- | --- |
-| `MemoryEngine` | 单实例 local 地址分配、容量校验、backend 生命周期；持有带宽竞争状态（`_advance`、`_pop_finished`、`_reallocate`、`_predict_earliest`、`_build_results`） | 多实例数量、跨实例路由、DP 复制、事件队列、最终统计 |
+| `MemoryEngine` | 单实例 local 地址分配、容量校验、backend 生命周期；持有带宽竞争状态（`_advance`、`_pop_finished`、`_reallocate`、`_predict_all`、`_build_results`） | 多实例数量、跨实例路由、DP 复制、事件队列、最终统计 |
 | `MemoryPool` | 实例集合、global 地址窗口、global→local 转换、`submit(request, now)`（ARRIVAL）+ `finish(rid, engine_id, now)`（FINISH）；不做统计 | DRAM/NAND 细节、引擎内部带宽状态、事件队列管理、Event |
 | `SimpleSimulator` | 管理事件堆（Event 带 callback）；`schedule_arrival` 用闭包构造回调；`run()` 直接 `event.callback()`；聚合 makespan 和 per-source 指标 | 地址映射、介质请求转换、engine 身份 |
 | `des/event.py` | `Event`：`time` + `callback` + `request_id` + `metrics`；无 `EventKind` | — |
@@ -203,21 +203,23 @@ TODO(phase-2): 如果目标硬件共享传输链路，需引入 POOL scope（共
 
 ### 6.1 MemoryRequest — 统一请求类型
 
-事件路径和同步路径共用 `MemoryRequest`。取代了旧的 `MemoryRequest` 和 `MemoryObject`：
+事件路径和同步路径共用 `MemoryRequest`（它取代了旧的 `MemoryObject` 包装，
+字段已全部提升到请求上）：
 
 ```python
 @dataclass
 class MemoryRequest:
-    addr: int                       # 地址
-    size: int                       # 字节数（属性 size_bytes 为别名）
-    req_type: MemoryRequestType     # 读写类型
-    media_req_num: int = 0          # 按 granularity 分解的估计数量
-    media_request_list = []         # 分解后的介质请求（由 backend 填充）
+    size: int                           # 字节数
+    req_type: MemoryRequestType         # 读写类型
+    addr: Optional[int] = None          # 地址；KWRITE 可省略（由 pool 分配）
+    media_req_num: int = 0              # 按 granularity 分解的估计数量
+    media_request_list: List["MediaRequest"] = field(default_factory=list)
+                                        # 分解后的介质请求（由 backend 填充）
 
     # 事件路径字段
     request_id: str = ""
     source_id: str = ""
-    mem_engine_id: int | None = None
+    mem_engine_id: Optional[int] = None
 
     # Engine mutable state (event path)
     arrival_time: float = 0.0
@@ -229,8 +231,6 @@ class MemoryRequest:
 - ARRIVAL 时 Simulator 构造 `MemoryRequest`
 - FINISH 时 Simulator 调 `pool.finish(rid, engine_id, now)`，不构造 MemoryRequest
 - Engine 在预测时给 `request.metrics` 赋值，返回 `List[MemoryRequest]`
-
-`MemoryRequest` 和 `MemoryObject` 已删除。
 
 ### 6.2 MemoryRequestMetrics
 
@@ -244,7 +244,7 @@ class MemoryRequestMetrics:
     mem_engine_id: int
     arrival_time: float
     finish_time: float
-    size_bytes: int
+    size: int
     latency: float
     standalone_time: float
     contention_delay: float
@@ -255,9 +255,9 @@ class MemoryRequestMetrics:
 
 ```text
 latency           = finish_time - arrival_time
-standalone_time   = size_bytes / B_effective
+standalone_time   = size / B_effective
 contention_delay  = latency - standalone_time
-average_bandwidth = size_bytes / latency
+average_bandwidth = size / latency
 ```
 
 ### 6.3 Event：回调驱动的离散事件
@@ -272,64 +272,76 @@ class Event:
     seq: int = 0                        # 同时间事件排序用
 ```
 
-`EventKind` 删除——ARRIVAL 和 FINISH 的区别体现在 `callback` 函数体内，不需要枚举判断。
+不设 `EventKind` 枚举：ARRIVAL 和 FINISH 的区别体现在 `callback` 函数体内。
 
-Simulator 在 `schedule_arrival` 和 `_handle_finish` 中通过闭包构造正确的回调：
+Simulator 在 `schedule_arrival`（ARRIVAL）和 FINISH 事件回调（FINISH）中通过
+闭包构造正确的回调；两者的引擎入口不同——ARRIVAL 调 `pool.submit(request,
+now)`，FINISH 回调调 `pool.finish(rid, engine_id, now)`。返回值（全量预测
+快照）统一交给 `_refresh_finish_events` 刷新事件。完整伪代码见 §8.4。
 
-```python
-def schedule_arrival(...):
-    def _on_arrival():
-        request = MemoryRequest(...)
-        entries = self._pool.submit(request, now=time)
-        self._refresh_finish_events(entries)
-    ev = Event(time=time, callback=_on_arrival, request_id=request_id, ...)
-    heapq.heappush(...)
-
-def _refresh_finish_events(self, entries):
-    for rid, ft, metrics in entries:
-        def _on_finish():
-            self._request_metrics.append(metrics)
-            request = MemoryRequest(..., is_finish=True, ...)
-            updated = self._pool.submit(request, now=ft)
-            self._refresh_finish_events(updated)
-        ev = Event(time=ft, callback=_on_finish, request_id=rid, metrics=metrics)
-        heapq.heappush(...)
-```
-
-`run()` 简化为：
+`run()` 从堆中依次弹出事件并直接执行回调，弹出时先做 stale-skip：
 
 ```python
 while self._heap:
     event = heapq.heappop(self._heap)[2]
+    if (event.metrics is not None
+            and event.time != self._latest_finish.get(event.request_id)):
+        self._stale_count += 1      # 已被更新鲜的预测取代
+        continue
     event.callback()
 ```
 
-### 6.4 统一 submit，最早完成者先行
+### 6.4 独立 submit/finish，全量预测快照
 
-Simulator 对 ARRIVAL 和 FINISH 走同一个 `pool.submit(request, now)`。Engine 根据 ``pool.finish()`` 区分：
+ARRIVAL 和 FINISH 分别走 `pool.submit(request, now)` 与
+`pool.finish(rid, engine_id, now)`，两者都返回**全量快照**——该 engine 上
+所有 active 请求在当前等分份额下的预测（可为空列表）：
 
 ```
 ARRIVAL:
-  Simulator: Event → MemoryRequest(is_finish=False)
-  pool.submit(request, now) → engine: advance, add, reallocate, _predict_earliest
-    → return [(earliest_rid, ft, metrics), ...]
+  Simulator: pool.submit(request, now)
+  → engine: advance, 清扫已完成, add, reallocate, _predict_all
+  → return List[MemoryRequest]   # 每个 active 请求，各带预测 metrics
 
 FINISH:
-  Simulator: 从 event.metrics 构造 MemoryRequest(is_finish=True, rid, eng_id, size)
-  pool.submit(request, now) → engine: advance, pop, reallocate, _predict_earliest
-    → return [(next_earliest, ft, metrics), ...]
+  Simulator: pool.finish(rid, engine_id, now)
+  → engine: advance, 清扫已完成, pop rid, reallocate, _predict_all
+  → return List[MemoryRequest]   # 存活请求的预测快照；空 = 引擎空闲
 ```
 
-**核心不变式**：每个活跃请求最多一个 FINISH，且只有最早完成的持有。精确度由 FINISH 时的 reallocate 保证。
+**核心不变式**：
+
+1. **全量报告**：等分再分配使每次 submit/finish 改变**所有** active 请求的
+   份额，也就改变所有预测——所以每次调用返回全部 active 预测，恰好是
+   "变化集"的最小充分报告。只返回最早完成者必然漏报 n−1 个变化：漏报者的
+   旧事件停留在旧时刻，会早于修正事件触发而把未完成请求提前完成。
+2. **事件恒新鲜**：Simulator 用每次快照刷新所有 FINISH 事件（同 rid 同 ft
+   去重、不同 ft 惰性替换）。事件触发时刻 == 该 rid 最新预测 ⇒ remaining
+   恰好归零（±浮点 ulp）⇒ 弹出的必然是最终正确结果。stale-skip 是唯一
+   的有效性判定——"分辨真完成"完全在 Simulator 层。
+3. **无拒绝协议**：engine 不需要 ε 判定/拒绝分支——事件不可能早到。浮点
+   ulp 边界（≥1e11 B 级请求）下真完成请求若未被 ε 判定 pop，会出现在返回
+   快照中（ft ≈ now），Simulator 重排后立即再次触发完成，1-2 个额外事件。
+4. 精确度由 FINISH 时的 reallocate 保证：每次完成释放带宽后重算，下一次
+   快照把后续者的预测推向正确的最终时刻。
 
 ### 6.5 Pool 接口
 
 ```python
 def submit(
     self, request: MemoryRequest, *, now: float,
-) -> list[tuple[str, float, MemoryRequestMetrics]]:
-    """统一入口。"""
+) -> List[MemoryRequest]:
+    """提交 ARRIVAL；返回所属 engine 上全部 active 请求的预测快照。"""
+
+def finish(
+    self, rid: str, engine_id: int, now: float,
+) -> List[MemoryRequest]:
+    """处理 FINISH 事件；返回存活请求的预测快照（空 = 引擎空闲）。"""
 ```
+
+`engine_id` 必须保留：pool 没有 rid→engine 映射，多实例路由靠 FINISH 事件
+携带的 `metrics.mem_engine_id`。返回值里每个请求都带 `metrics`
+（预测时刻现算，事件触发时即为最终值），Simulator 用它们刷新事件。
 
 路由规则：
 
@@ -340,7 +352,6 @@ def submit(
 | 其它（KREAD） | `_validate_request` 二分查找窗口 |
 
 `get_tensor_addr` 返回 `(global_addr, engine_id)`。写请求通过它分配空间并扣容量，读请求使用预先分配的地址。
-```
 
 ## 7. 基于当前 Analytic 后端实现动态竞争
 
@@ -356,28 +367,44 @@ total_time = total_bytes / configured_bandwidth
 
 ### 7.2 引擎内部状态
 
-Engin 直接在实例上维护带宽竞争状态，不设独立的事件队列类，不维护预测缓存或事件指标：
+Engine 直接在实例上维护带宽竞争状态，不设独立的事件队列类，不维护预测缓存或事件指标：
 
 ```python
 class MemoryEngine:
     _active_requests: dict[str, MemoryRequest]
     _last_update_time: float
-    _runtime_mode: str | None
 ```
 
 预测用静态公式 `now + remaining / allocated_bw`，精度由 FINISH 回调修正。
 
 ### 7.3 动态带宽推进
 
-**`submit(request, local_addr, now)`** — 统一切入口：
+**`submit(request, now)`** — ARRIVAL：
+
+1. `_advance(now)` + `_pop_finished()`（清扫 remaining ≤ ε 的已完成请求）
+2. 校验 rid 不重复，加入 `_active_requests`
+3. `_reallocate()` — 均分带宽
+4. `_predict_all(now)` — 返回**全部** active 请求的 `(rid, ft)` 预测
+
+**`finish(rid, now)`** — FINISH 回调：
 
 1. `_advance(now)` + `_pop_finished()`
-2. 若 ``pool.finish()``：pop 指定 rid
-  否则：校验 rid 不重复，创建 `ActiveMemoryRequest` 加入 `_active_requests`
-3. `_reallocate()` — 均分带宽
-4. `_predict_earliest(now)` — 静态预测，筛选 `ft == min(ft)` 的最早者返回
+2. 若 rid 仍在 active 且 `remaining_bytes ≤ ε`：pop rid（事件 = 最新预测，
+   触发时必已完成；ε 只吸收浮点 ulp，>ε 时不 pop——请求会出现在返回
+   快照中、按修正的 ft≈now 立即重排，无需拒绝协议）
+3. `_reallocate()` + `_predict_all(now)` + `_build_results`
+4. 返回 `List[MemoryRequest]`（存活请求的全量预测快照）
 
-`notify_finish` 删除——统一到 `submit`。
+`_predict_all` 不做 `ft == min` 过滤，返回全部 active 请求的预测。清扫
+（`_pop_finished`）是安全的：任何被清扫的请求都持有自己的 FINISH 事件
+（它在上一次快照中被返回过），事件触发时走防御路径、metrics 照常收集。
+
+**正确性论证**（不要用"事件触发与预测之间无状态变更"这种过强伪不变量）：
+每次状态变更返回全量快照、Simulator 据此刷新所有事件 ⇒ 任何事件触发时刻
+等于其 rid 的最新预测 ⇒ 按该预测（现行份额恒定）remaining 恰好归零。
+若在预测与触发之间有其它状态变更介入，那次变更的快照已经刷新了本事件
+（同 ft 去重 / 异 ft 惰性替换），旧事件被 stale-skip。浮点残差
+（>1e11 B 量级消耗时 ulp 可能超过 ε）最多造成一次 ≈now 的额外重排。
 
 ### 7.4 带宽共享
 
@@ -426,48 +453,45 @@ sequenceDiagram
 
     Note over SIM: 事件循环 pop ARRIVAL(A, t0)
 
-    SIM->>SIM: Event → MemoryRequest(A, is_finish=False)
     SIM->>Pool: submit(A, now=t0)
     Pool->>Pool: resolve engine, global→local addr
-    Pool->>Eng: submit(A, local_addr, now=t0)
-    Eng->>Eng: _advance, _collect<br/>add A, _reallocate (A:100%)<br/>_predict_earliest → A
-    Eng-->>Pool: [(A, ft_A, metrics_A)]
-    Pool-->>SIM: [(A, ft_A, metrics_A)]
+    Pool->>Eng: submit(A, now=t0)
+    Eng->>Eng: _advance, add A, _reallocate (A:100%)<br/>_predict_all → [A]
+    Eng-->>Pool: [A: (ft_A, metrics_A)]
+    Pool-->>SIM: [A: (ft_A, metrics_A)]
 
     SIM->>SIM: 新建 FINISH(A)
 
     Note over SIM: ... pop ARRIVAL(B, t1) ...
 
-    SIM->>SIM: Event → MemoryRequest(B, is_finish=False)
     SIM->>Pool: submit(B, now=t1)
-    Pool->>Eng: submit(B, local_addr, now=t1)
-    Eng->>Eng: _advance (A rem-=bw·Δt)<br/>add B, _reallocate (各50%)<br/>_predict_earliest → A
-    Eng-->>Pool: [(A, ft_A', metrics_A')]
-    Pool-->>SIM: [(A, ft_A', metrics_A')]
+    Pool->>Eng: submit(B, now=t1)
+    Eng->>Eng: _advance (A rem-=bw·Δt)<br/>add B, _reallocate (各50%)<br/>_predict_all → [B, A]
+    Eng-->>Pool: [B: (ft_B, mB), A: (ft_A', mA')]
+    Pool-->>SIM: [B, A] 全量快照
 
-    SIM->>SIM: 替换 FINISH(A)<br/>B 不建 FINISH
+    SIM->>SIM: 刷新所有 FINISH：新建 FINISH(B)<br/>替换 FINISH(A) → ft_A'
 
-    Note over SIM: ... pop FINISH(A) ...
+    Note over SIM: ... pop FINISH(A) @ ft_A' ...
 
-    SIM->>SIM: metrics → MemoryRequest(A, is_finish=True)
-    SIM->>Pool: submit(A, now=ft_A')
-    Pool->>Eng: submit(A, local_addr, now=ft_A')
-    Eng->>Eng: _advance, _collect, pop A<br/>_reallocate (B:100%)<br/>_predict_earliest → B
-    Eng-->>Pool: [(B, ft_B, metrics_B)]
-    Pool-->>SIM: [(B, ft_B, metrics_B)]
+    SIM->>Pool: finish(rid_A, engine_id, ft_A')
+    Pool->>Eng: finish(rid_A, ft_A')
+    Eng->>Eng: _advance, pop A (事件=最新预测=真完成)<br/>_reallocate (B:100%)<br/>_predict_all → [B]
+    Eng-->>Pool: [B: (ft_B', metrics_B)]
+    Pool-->>SIM: [B: (ft_B', metrics_B)]
 
-    SIM->>SIM: 收集 metrics_A, 新建 FINISH(B)
+    SIM->>SIM: 收集 metrics_A, 刷新 FINISH(B) → ft_B'
 ```
 
 **三层隔离**：
-- **SimpleSimulator**：管理事件堆。Event 带 callback 闭包，`run()` 直接 `event.callback()`。ARRIVAL 调 `pool.submit(request, now)`，FINISH 调 `pool.finish(rid, engine_id, now)`。
+- **SimpleSimulator**：管理事件堆。Event 带 callback 闭包，`run()` 直接 `event.callback()`。ARRIVAL 调 `pool.submit(request, now)`，FINISH 调 `pool.finish(rid, engine_id, now)`，两者返回**全量快照**；Simulator 用快照刷新所有事件，"分辨真完成"= 弹出时的 stale-skip。
 - **Pool**：`submit` + `finish` 分路路由。不做统计。
-- **Engine**：`submit()`：`_advance` → `_pop_finished` → add → `_reallocate` → `_predict_earliest` → `_build_results`（返回 `List[MemoryRequest]`，每项带 `metrics`）。`finish()`：`_advance` → `_pop_finished` → pop → `_reallocate` → `_predict_earliest` → `_build_results`。
+- **Engine**：`submit()`：`_advance` → `_pop_finished` → add → `_reallocate` → `_predict_all`（全部 active）。`finish()`：`_advance` → `_pop_finished` → pop rid（ε 守护）→ `_reallocate` → `_predict_all`。均返回 `List[MemoryRequest]`（每项带 `metrics`）。
 
 **关键设计点**：
-- **惰性删除**：`_refresh_finish_events` 不扫描堆，通过 `_latest_finish` dict O(1) 记录最新预测。旧 FINISH 在 pop 时被跳过。
-- **最早完成者先行**：只有最早完成的请求持有 FINISH。后续者在 FINISH 回调中补建。
-- **FINISH 回调修正精度**：初始预测可能悲观，但每次完成释放带宽后重算。
+- **惰性删除**：`_refresh_finish_events` 不扫描堆，通过 `_latest_finish` dict O(1) 记录最新预测。旧 FINISH 在 pop 时被跳过；同 rid 同 ft 去重（不重复 push），`_recorded` 集合兜底同 rid 双同刻事件的重复收集。
+- **全量快照**：每次状态变更返回全部 active 预测，Simulator 刷新全部事件——事件恒等于最新预测，触发即真完成。
+- **FINISH 回调修正精度**：预测是暂定的，每次完成释放带宽后重算并把所有后续者推向最终时刻；metrics 在预测时现算、事件触发时即为最终值。
 
 ### 8.2 初始化
 
@@ -491,6 +515,8 @@ class SimpleSimulator:
         self._heap: list[tuple[float, int, Event]] = []
         self._seq = 0
         self._request_metrics: list[MemoryRequestMetrics] = []
+        self._latest_finish: dict[str, float] = {}
+        self._recorded: set[str] = set()   # 已收集完成 metrics 的 rid
 
     def _handle_arrival(self, event):
         request = MemoryRequest(
@@ -503,30 +529,42 @@ class SimpleSimulator:
             self._pool.submit(request, now=event.time))
 
     def _handle_finish(self, event):
-        if event.metrics is not None:
+        # 事件触发 = 最新预测 = 真完成：收集调度时捕获的 metrics
+        # （_recorded 防同 rid 同刻副本的重复收集）
+        if event.metrics is not None and event.request_id not in self._recorded:
             self._request_metrics.append(event.metrics)
+            self._recorded.add(event.request_id)
+        # 存活请求的预测快照（可为空）继续刷新
         self._refresh_finish_events(
             self._pool.finish(event.request_id,
                               event.metrics.mem_engine_id, event.time))
 
     def _refresh_finish_events(self, entries):
-        for req in entries:
-            m = req.metrics
+        for entry in entries:
+            m = entry.metrics
             rid = m.request_id
             ft = m.finish_time
+            if self._latest_finish.get(rid) == ft:
+                continue  # 同 rid 同 ft 已调度过：去重，防同刻双事件
             # 惰性删除：记录最新预测时间，旧 FINISH 在 pop 时跳过
             self._latest_finish[rid] = ft
 
             def _on_finish():
-                self._request_metrics.append(m)
-                self._refresh_finish_events(
-                    pool.finish(rid, m.mem_engine_id, ft))
+                self._handle_finish(Event(...))
 
             self._push_event(Event(time=ft, callback=_on_finish,
                                    request_id=rid, metrics=m))
 ```
 
-**惰性删除原理**：`_refresh_finish_events` 不扫描堆——只记录 `_latest_finish[rid] = ft` 然后 `heappush`。旧 FINISH 留在堆中，`run()` pop 时通过 `event.time == _latest_finish[rid]` 校验，不匹配则跳过。O(1) push，O(log n) pop。
+**惰性删除原理**：`_refresh_finish_events` 不扫描堆——只记录 `_latest_finish[rid] = ft`
+然后 `heappush`。旧 FINISH 留在堆中，`run()` pop 时通过 `event.time ==
+_latest_finish[rid]` 校验，不匹配则跳过（stale-skip = 事件有效性判定，
+"分辨真完成"就在这）。O(1) push，O(log n) pop。
+
+**去重与 `_recorded` 都是正确性必需**（不是优化）：`_latest_finish` 振荡
+（ft→ft'→ft）可使同一 rid 的两个同刻事件并存，`event.time == latest` 的
+stale 检查对同刻副本失效——去重阻止副本入堆；若仍出现（例如清扫已把 rid
+移出、其事件经防御路径触发），`_recorded` 保证 metrics 只收集一次。
 
 ### 8.5 Engine 内部状态管理
 
@@ -534,14 +572,18 @@ class SimpleSimulator:
 
 1. `_advance(t)` + `_pop_finished()`
 2. 创建 `MemoryRequest` 加入 `_active_requests`
-3. `_reallocate()` + `_predict_earliest(now)` + `_build_results(predictions)`
-4. 返回 `List[MemoryRequest]`（每项带 `metrics`，最早完成者）
+3. `_reallocate()` + `_predict_all(now)` + `_build_results`
+4. 返回 `List[MemoryRequest]`（全部 active 请求的预测快照，每项带 `metrics`）
 
 **`finish(rid, now)`** — FINISH 回调：
 
-1. `_advance(now)` + `_pop_finished()` + pop rid
-2. `_reallocate()` + `_predict_earliest(now)` + `_build_results(predictions)`
-3. 返回 `List[MemoryRequest]`（下一批最早完成者）
+1. `_advance(now)` + `_pop_finished()`
+2. 若 rid 在 active 且 `remaining_bytes ≤ ε`（`_DEFAULT_COMPLETION_EPSILON_BYTES
+   = 1e-6`）：pop rid。事件 = 最新预测 ⇒ 触发即真完成，ε 只吸收浮点 ulp；
+   若 rid 已被清扫或同刻兄弟事件移出（防御路径），跳过 pop 即可。
+3. `_reallocate()` + `_predict_all(now)` + `_build_results`
+4. 返回 `List[MemoryRequest]`（存活请求的预测快照；空 = 引擎空闲）。清扫保证
+   直接调用方（不经 DES）也能自然回收已完成请求。
 
 ## 9. 同步接口与事件接口的关系
 
@@ -557,14 +599,15 @@ metrics = engine.issue_request([addr], [size], [req_type])
 
 同步 `issue_request()` 使用 local address，调用现有 backend batch 模式，不产生 arrival 或 active request 竞争状态。
 
-### 9.2 禁止混用运行模式
+### 9.2 事件与同步可交错混用
 
-同一个仿真 session 中同一 engine 不应混用：
+同一 engine 上事件路径（`submit()`/`finish()`）与同步路径（`issue_request()`）
+可任意交错调用，不设 runtime-mode 锁，互不干扰：
 
-- `issue_request()`（同步执行）；
-- `pool.submit()` / `engine.submit()`（事件驱动执行）。
-
-首次调用锁定该 engine 的 runtime mode（sync / event），混用抛 `RuntimeError`。
+- 两条路径的状态与指标严格隔离：事件路径的带宽竞争状态
+  （`_active_requests`、`_last_update_time`）与同步路径的
+  `MemoryEngineMetrics` 互不读取；
+- 事件指标由 Simulator 侧收集，不进同步累计器（反之亦然）。
 
 ## 10. 指标设计
 
@@ -573,216 +616,120 @@ Engine 只维护同步路径的 `MemoryEngineMetrics`（`issue_request` 的累�
 - **`MemoryRequestMetrics`**：单个完成请求的指标，在 engine 预测时预计算，嵌入 FINISH 事件。Simulator 在 FINISH 触发时收集到 `SimulationResult.request_metrics`。
 - **`SimulationResult`**：`run()` 的输出，包含全部 `request_metrics`、per-source 聚合（avg_latency、avg_contention_delay、total_bytes、count）、makespan。
 
-Pool 和 Engine 都不维护事件路径的累计计数器（`MemoryPoolMetrics`、`EngineEventMetrics`、`BandwidthAllocation` 均已删除）。
+Pool 和 Engine 不维护事件路径的累计计数器；事件路径的最终统计只由
+`SimulationResult` 汇总。
 
-### 10.4 结果输出
+### 10.1 结果输出
 
 `SimulationResult` 提供两个导出方法：
 
 ```python
 result = sim.run()
-result.save_json("output/des_result.json")   # 机器可读
-result.save_html("output/des_result.html")   # 可视化报告
+result.save_json("output/des_result.json")            # 机器可读汇总
+result.save_trace("output/des_result_trace.json")     # Chrome tracing，逐请求行
 ```
 
-`output/` 目录已加入 `.gitignore`。HTML 报告自包含，双击浏览器直接查看：
+`output/` 已加入 `.gitignore`。JSON 包含 makespan、per-source 聚合
+（avg_latency、avg_contention_delay、total_bytes、count）与全部
+`request_metrics` 明细；trace 文件供 chrome://tracing 做逐请求时间线分析。
 
-- **概览卡片**：makespan、请求数、stale 事件数
-- **Gantt 图**：按 engine 分组，显示每个请求的到达/完成时间线，绿色=standalone，橙色=contention
-- **Latency Breakdown 柱状图**：standalone_time 和 contention_delay 堆叠
-- **Per-Source 汇总表**：avg_latency、total_bytes、count
-- **悬停工具**：鼠标悬停显示 arrival_time、finish_time、latency、standalone、contention
+## 11. 配置语义
 
-## 11. 对当前代码的改动
-
-### 11.1 `memory_engine.py`
-
-主要改动：
-
-- 删除 DP 展开和 `storage_instance_num` round-robin。
-- 地址空间改为单实例 local address。
-- 保留 `get_tensor_addr()`、`issue_request()`（同步路径）和 `media_system`。
-- 增加 `instance_id`、`global_base` 等由 Pool 注入的实例元数据。
-- 事件驱动状态：`submit(request, local_addr, now)` 统一入口，根据 ``pool.finish()`` 分支（ARRIVAL: add + reallocate；FINISH: pop + reallocate）。`_predict_earliest` 筛选最早完成者。
-
-### 11.2 `memory_config.py`
-
-建议：
-
-- 从 `MemoryEngineConfig` 移除或弃用 `dp_size`。
-- 从 `MemoryEngineConfig` 移除或弃用 `storage_instance_num`。
-- `capacity` 明确定义为单实例容量。
-- 增加 `MemoryPoolConfig`：实例数量、allocation policy。
-- 增加 media bandwidth 和 effective bandwidth 的明确配置与派生。
-
-兼容迁移可以分两步：
-
-1. 暂时保留旧字段，只允许值为 1，并发出 deprecation warning。
-2. 文档和配置迁移完成后删除字段。
-
-### 11.3 `memory_pool/pool.py`
-
-包含：
-
-- `MemoryPool`：constructor 直接接收 `instance_count + engine_config`（仅同构）。`get_tensor_addr()` 从 RR 位置扫描，选第一个容量足够的。`submit(request, now)` 统一入口（校验→resolve→forward）。
-- `AllocationPolicy` 枚举已删除；ROUND_ROBIN 硬编码，留 TODO。
-
-### 11.4 新增数据契约
-
-`memory_pool/request_metrics.py`：
-
-- `MemoryRequestMetrics`：单个完成请求的指标，在预测时预计算。
-
-`des/event.py`：
-
-- `Event`：`time` + `callback` + `request_id` + `metrics`，无 `EventKind`。Simulator 通过闭包注入回调逻辑，`run()` 直接 `event.callback()`。
-
-### 11.5 事件驱动竞争实现
-
-带宽竞争状态（`_advance`、`_pop_finished`、`_reallocate`、`_predict_earliest`、`_build_results`）内置于 `MemoryEngine`。`submit` 统一 ARRIVAL/FINISH。带宽固定均分（`peak / n`）。TODO(phase-2): 可配置带宽分配策略。
-
-### 11.7 `memory_metrics.py`
-
-- `MemoryEngineMetrics` 单实例累计口径（同步路径）。
-- `MemoryRequestMetrics` 在 `memory_pool/request_metrics.py` 中定义。
-- 删除 `EngineEventMetrics`、`SourceTrafficMetrics`、`MemoryPoolMetrics`、`InstanceMetricsSummary`、`BandwidthAllocation`。
-
-### 11.8 `run.py`
-
-- `instances=1` 时仍可直接创建 `MemoryEngine`，或统一创建单实例 `MemoryPool`。
-- `instances>1` 时创建 `MemoryPool`，不能再将实例数传给单个 Engine。
-- 状态栏显示单实例容量、pool 总容量、allocation policy。
-- KV workload 通过 Pool 分配 global address 后提交。
-
-### 11.9 workload
-
-KV workload generator 仍只负责生成 byte address、byte size 和 request type，不直接依赖 contention 或 backend。
-
-需要调整的是调用位置：
-
-- 单实例测试继续使用 local address 和 `MemoryEngine`。
-- 池化 workload 使用 `MemoryPool.get_tensor_addr()` 返回的 global address。
-- DP 复制若仍需要，由父项目或 workload 调用层显式生成。
-
-### 11.10 Ramulator/MQSim
-
-第一阶段不修改竞争行为：
-
-- wrapper 接口保持 batch 模式。
-- 不向它们连续注入带 arrival time 的请求。
-- 不基于多次独立调用推导 native 竞争。
-- event-driven `submit()` 遇到非 Analytic backend 时抛出明确的 `NotImplementedError` 或能力错误。
-
-## 12. 配置语义调整
-
-建议的新配置概念：
+当前 JSON 配置（见 `configs/analytic_pool.json`）：
 
 ```json
 {
+  "mem_type": "HBM",
+  "media_config": {
+    "media_type": "analytic",
+    "capacity": 4.0,
+    "bandwidth": 400.0
+  },
   "mem_pool": {
     "instances": 4
-  },
-  "engine": {
-    "media_type": "analytic",
-    "capacity_per_instance_gib": 32.0,
-    "bandwidth_per_instance_gib_s": 400.0
   }
 }
 ```
 
-关键变化：
+关键语义：
 
-- 容量和 media bandwidth 是 per-instance 参数。
-- pool 总容量由实例容量求和。
-- 旧配置 `instances=1` 可自动迁移。
-- 旧配置若 `instances>1`，当前 `capacity` 曾表示总容量，不能静默解释为单实例容量；应要求用户明确给出 `capacity_per_instance_gib`，或者由兼容加载器按旧口径除以实例数并打印醒目警告。
+- `capacity`：`instances == 1` 时为单实例容量；`instances > 1` 时按**总容量**
+  解释，`run.py` 将其除以实例数构造每实例配置，并打印醒目警告。
+- `bandwidth`：**每实例全量带宽**，实例间不分摊——N 实例模型的聚合峰值约为
+  N × bandwidth。这是"实例相互独立"语义的一部分，不是共享介质被均分。
+- 单实例口径：`MemoryEngineConfig` 中 `total_capacity == per_dp_capacity ==
+  capacity`；`dp_size` / `storage_instance_num` 已弃用（值 ≠ 1 时发
+  `DeprecationWarning`）。
+- 事件驱动（`--des-schedule`）仅支持 Analytic backend；非 Analytic 且
+  `instances > 1` 时 `run.py` 警告并仅提供同步 `issue_request` 路径。
 
-## 13. 测试方案
+## 12. 测试方案
 
-### 13.1 MemoryEngine 单实例回归
+### 12.1 MemoryEngine 单实例回归
 
 - 地址对齐和容量溢出。
 - 单请求和多请求 batch Analytic 结果不变。
 - Ramulator/MQSim 现有单实例测试不受影响。
 - `dp_size`、`storage_instance_num` 弃用行为符合预期。
 
-### 13.2 MemoryPool 地址测试
+### 12.2 MemoryPool 地址测试
 
 - 同构和异构容量窗口。
 - 指定实例分配。
-- 未指定实例的 round-robin/least-allocated。
+- 未指定实例的 ROUND_ROBIN 分配（LEAST_ALLOCATED 未实现）。
 - global/local 地址转换。
 - 地址恰好位于窗口边界。
 - 请求跨窗口时拒绝。
 - 指定错误 `mem_engine_id` 时拒绝。
 - 所有实例容量不足时给出清晰异常。
 
-### 13.3 动态带宽测试
+### 12.3 动态带宽测试
 
 - 单请求结果等于当前 Analytic。
 - 所有请求同时到达时 final makespan 等于总字节除以峰值带宽。
 - 第二个请求到达前，第一请求按全带宽推进。
 - 新 ARRIVAL 到达后带宽均分，预测完成时间推迟。
-- submit 返回全部活跃请求的预测 `[(rid, finish_time, metrics), ...]`。
+- `submit`/`finish` 每次返回全部 active 请求的预测（`List[MemoryRequest]`，按插入序）；单请求时恰为 1 条。
+- 同刻并列完成：每个请求各完成一次、各有 metrics，无遗漏无重复。
+- **在途重预测回归**：后到更小请求缩小在途大请求份额时，返回快照必须包含被推迟的大请求（其旧 FINISH 被刷新而非早触发）——防止"只返回最早完成者"式的实现把尚未完成的在途请求提前完成；最终 makespan 等于手算值、无字节丢失。
+- 到达恰逢并列完成时刻：请求全部有 metrics，无丢失无重复。
 - 多个同时间 arrival 与调用顺序无关。
 - 浮点边界下 remaining bytes 不为负。
 - advance + _pop_finished 自动清理已完成请求。
 
-### 13.4 多实例竞争测试
+### 12.4 多实例竞争测试
 
 - 不同实例上的请求互不影响。
 - 同一实例、不同 source 的请求发生带宽竞争。
 - 每个实例有独立的 `last_update_time` 和 active request 状态。
 - TODO(phase-2): Pool shared link 下不同实例请求竞争同一带宽。
-- pool metrics 等于各实例统计的正确聚合。
+- `SimulationResult` 的 makespan / per-source 聚合等于各实例 `request_metrics` 的正确聚合。
 
-### 13.5 父项目接口契约测试
+### 12.5 父项目接口契约测试
 
 使用 `SimpleSimulator` 验证：
 
 1. 逐个 `schedule_arrival()` 后 `sim.run()` 返回正确的结果。
-2. `pool.submit()` 返回正确的 `[(rid, finish_time, metrics), ...]`。
-3. 新 ARRIVAL 后旧 FINISH 按 `request_id` 匹配被正确替换。
-4. FINISH 触发时从 `event.metrics` 直接收集，不调 pool。
-5. 同一 engine 上混用 `engine.submit()`（事件）和 `engine.issue_request()`（同步）抛 `RuntimeError`。
+2. `pool.submit()`/`pool.finish()` 返回全部 active 请求的预测（`List[MemoryRequest]`，每项带 `metrics`；空列表 = 引擎空闲）。
+3. 新 ARRIVAL 后旧 FINISH 被快照刷新正确替换（stale-skip 与同 rid 同 ft 去重），被推迟的在途请求的旧事件永不触发。
+4. FINISH 事件触发即真完成：直接从事件闭包捕获的 `metrics` 收集，无需二次确认。
+5. 同一 engine 上混用 `engine.submit()`（事件）和 `engine.issue_request()`（同步）互不干扰、不抛错；两条路径指标独立。
 6. `memory_pool` 不 import `des`。
 
-## 14. 建议实施阶段
+## 13. 后续工作（phase-2 及以后）
 
-### 阶段一：单实例职责清理
-
-- 清理 `MemoryEngine` 的 DP 和伪多实例逻辑。
-- 保持单实例同步 API。
-- 明确单实例容量和指标口径。
-
-### 阶段二：MemoryPool
-
-- 实现固定 global address window。
-- 实现实例分配和 global/local 转换。
-- 实现池级 `submit()` 事件接口。
-- 实现 pool metrics。
-
-### 阶段三：事件驱动竞争
-
-- 在 `MemoryEngine` 中实现 `_advance`、`_pop_finished`、`_reallocate`、`_predict_earliest`。
-- 带宽固定均分（`peak / n`）。`submit` 统一 ARRIVAL/FINISH（``pool.finish()`` 分支）。
-- Event：回调驱动，无 `EventKind`。`run()` 直接 `event.callback()`。
-- `SimpleSimulator` 管理 FINISH 事件堆，按 `request_id` 匹配替换。
-
-### 后续阶段
-
-- **可配置带宽分配策略**：在 `MemoryRequest` 中恢复 `weight` 字段，增加 `WeightedTransferShare` 和 `SourceFairShare`，通过 `sharing_policy` 配置项选择。
+- **可配置带宽分配策略**：在 `MemoryRequest` 中增加 `weight` 字段，通过 `sharing_policy` 配置项选择加权 / source-fair 分配。
 - POOL 作用域（共享带宽资源）：跨 engine 事件协调。
 - 读写分别限速或共享/全双工策略。
 - 请求取消和超时。
 - 跨实例 stripe、迁移和副本。
 - 带 arrival time 的 Ramulator/MQSim native trace。
 
-## 15. 最终边界
+## 14. 最终边界
 
 本方案完成后：
 
-- `MemoryEngine`：内部 `_advance` / `_pop_finished` / `_reallocate` / `_predict_earliest` / `_build_results`。`submit(request, now)`（ARRIVAL）、`finish(rid, now)`（FINISH），返回 `List[MemoryRequest]`（带 `metrics`）。同步 `issue_request()` 保留。
+- `MemoryEngine`：内部 `_advance` / `_pop_finished` / `_reallocate` / `_predict_all` / `_build_results`。`submit(request, now)`（ARRIVAL）、`finish(rid, now)`（FINISH），返回全部 active 请求的预测快照 `List[MemoryRequest]`（带 `metrics`）。同步 `issue_request()` 保留。
 - `MemoryPool`：`submit(request, now)` + `finish(rid, engine_id, now)`。不做统计。
 - `SimpleSimulator`：ARRIVAL 调 `pool.submit()`，FINISH 调 `pool.finish()`。聚合 makespan 和 per-source 指标。
 - `Event`（`time` + `callback` + `request_id` + `metrics`），无 `EventKind`。`run()` 直接 `event.callback()`。

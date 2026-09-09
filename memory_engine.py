@@ -6,8 +6,10 @@ to the configured MediaSystem backend.
 
 Sync mode (``issue_request()``) provides batch throughput estimates.
 Event mode (``submit()``) drives bandwidth competition directly on the
-engine, returning per-request predictions computed via cascading
-completion.
+engine: every state change (an ARRIVAL or a FINISH) returns a **full
+snapshot** — predictions for all active requests — so the simulator can
+refresh every FINISH event.  An event therefore always fires at the
+request's true completion; stale events are skipped by the simulator.
 """
 
 import math
@@ -35,10 +37,13 @@ class MemoryEngine:
     MediaSystem backend for batch throughput simulation.
 
     Event mode: ``submit()`` holds bandwidth competition state directly
-    (active requests, allocated bandwidth, remaining bytes).  Each call
-    advances time, collects completed requests, reallocates bandwidth,
-    and returns full predictions for all active requests via cascading
-    completion.
+    (active requests, allocated bandwidth, remaining bytes).  Equal-split
+    reallocation moves the finish time of *every* active request on every
+    call, so ``submit()``/``finish()`` return predictions for **all** active
+    requests and the simulator refreshes every FINISH event from them.
+    Consequently a FINISH event always fires exactly at the request's true
+    completion under the latest schedule; events that were superseded are
+    skipped as stale by the simulator.  No event ever needs to be refused.
     """
 
     def __init__(self, mem_config: MemoryEngineConfig):
@@ -186,7 +191,22 @@ class MemoryEngine:
         request: "MemoryRequest",
         now: float,
     ) -> List["MemoryRequest"]:
-        """Submit an ARRIVAL; return earliest-finishing requests."""
+        """Submit an ARRIVAL; return predictions for all active requests.
+
+        Advances the engine clock, collects requests that have already
+        exhausted their remaining bytes, inserts *request*, reallocates
+        bandwidth equally among all active requests, and returns a **full
+        snapshot** — every active request with its predicted ``metrics``
+        (``finish_time`` under the current equal split), in insertion order.
+
+        The snapshot is the report of everything that changed: an equal-split
+        reallocation moves the finish time of *every* active request, so the
+        caller (the simulator) refreshes each request's FINISH event from
+        this list.  That keeps every scheduled event equal to the latest
+        prediction, which guarantees a FINISH event fires exactly at the
+        request's true completion — the simulator never needs to second-guess
+        a completion.
+        """
         self._advance(now)
         self._pop_finished()
 
@@ -202,19 +222,43 @@ class MemoryEngine:
         self._active_requests[request.request_id] = request
 
         self._reallocate()
-        return self._build_results(self._predict_earliest(now))
+        return self._build_results(self._predict_all(now))
 
     def finish(
         self, rid: str, now: float,
     ) -> List["MemoryRequest"]:
-        """Handle a FINISH event: remove *rid*, reallocate, re-predict."""
+        """Handle a FINISH event; return predictions for all active requests.
+
+        The fired event is by construction the request's latest prediction
+        (the simulator refreshes every event from every engine snapshot), so
+        its remaining bytes are exhausted at *now* (within float noise of the
+        epsilon) and *rid* is popped.  After the pop the engine reallocates
+        and returns the full snapshot of the surviving requests — possibly
+        empty when the engine is idle.
+
+        Two defensive notes:
+
+        - If *rid* is absent (already collected by ``_pop_finished`` or a
+          same-time sibling event), the engine simply returns the snapshot of
+          the remaining requests; the fired event's metrics were captured at
+          scheduling time and remain final.
+        - If *rid* is present but its ``remaining_bytes`` is still above the
+          epsilon (only reachable through float round-off on very large
+          requests, never through a genuinely stale event), it is left
+          active: it appears in the returned snapshot with a corrected
+          ``finish_time`` (≈ *now*), the simulator reschedules it, and the
+          next event completes it.  There is no refusal protocol — the
+          snapshot carries the correction naturally.
+        """
         self._advance(now)
         self._pop_finished()
-        # A sibling callback (same time) may have already popped this.
-        if rid in self._active_requests:
+        req = self._active_requests.get(rid)
+        if req is not None and (
+            req.remaining_bytes <= _DEFAULT_COMPLETION_EPSILON_BYTES
+        ):
             self._active_requests.pop(rid)
         self._reallocate()
-        return self._build_results(self._predict_earliest(now))
+        return self._build_results(self._predict_all(now))
 
     # ------------------------------------------------------------------
     # Internal helpers (called in submit order)
@@ -240,7 +284,16 @@ class MemoryEngine:
         self._last_update_time = now
 
     def _pop_finished(self) -> None:
-        """Pop finished requests from the active set."""
+        """Pop requests whose remaining bytes are exhausted (within epsilon).
+
+        Called between ``_advance`` and ``_reallocate`` so that the equal
+        split and the prediction snapshot only cover requests that are still
+        genuinely in flight.  Safe because every state change also returns a
+        full snapshot: a request collected here still holds a scheduled
+        FINISH event (it was part of the previous snapshot), so its metrics
+        are recorded when that event fires, and later events for it hit the
+        defensive path.
+        """
         for rid, req in list(self._active_requests.items()):
             if req.remaining_bytes <= _DEFAULT_COMPLETION_EPSILON_BYTES:
                 self._active_requests.pop(rid)
@@ -254,29 +307,42 @@ class MemoryEngine:
         for req in self._active_requests.values():
             req.allocated_bandwidth = share
 
-    def _predict_earliest(self, now: float) -> List[Tuple[str, float]]:
-        """Return ``[(rid, ft), ...]`` for the earliest-finishing request(s).
+    def _predict_all(self, now: float) -> List[Tuple[str, float]]:
+        """Return ``(rid, ft)`` predictions for every active request.
 
-        Pure computation — no side effects, no metrics allocation.
+        Pure computation — no side effects, no metrics allocation.  Fts are
+        computed under the current equal split; they are provisional (a
+        future completion or arrival changes everyone's share), which is why
+        every state change returns this full snapshot so the caller can
+        refresh all FINISH events.
         """
-        if not self._active_requests:
-            return []
-
-        all_ft: List[Tuple[str, float]] = []
+        result: List[Tuple[str, float]] = []
         for rid, req in self._active_requests.items():
-            if req.allocated_bandwidth > 0:
-                ft = now + req.remaining_bytes / req.allocated_bandwidth
-            else:
-                ft = float("inf")
-            all_ft.append((rid, ft))
-
-        min_ft = min(ft for _, ft in all_ft)
-        return [(rid, ft) for rid, ft in all_ft if ft == min_ft]
+            if req.allocated_bandwidth <= 0:
+                # Invariant violation: every active request gets a positive
+                # share from _reallocate() before a prediction.  A non-positive
+                # share means the call order was broken (or the backend
+                # bandwidth is not > 0) — fail loudly instead of silently
+                # predicting a request that never completes.
+                raise ValueError(
+                    f"cannot predict request {rid!r}: allocated_bandwidth "
+                    f"= {req.allocated_bandwidth} must be > 0; "
+                    "_reallocate() must run before _predict_all()"
+                )
+            ft = now + req.remaining_bytes / req.allocated_bandwidth
+            result.append((rid, ft))
+        return result
 
     def _build_results(
         self, predictions: List[Tuple[str, float]],
     ) -> List["MemoryRequest"]:
-        """Attach MemoryRequestMetrics to each request and return the list."""
+        """Attach MemoryRequestMetrics to each prediction and return them.
+
+        Metrics are computed at prediction time and bound to the request.
+        They become final when the request's (refreshed) FINISH event fires;
+        an event only fires at the latest prediction, so the metrics it
+        captured are the final ones.
+        """
         from .memory_pool.request_metrics import MemoryRequestMetrics
 
         effective_bw = self.media_system._bandwidth_bytes_per_sec

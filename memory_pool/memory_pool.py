@@ -202,7 +202,12 @@ class MemoryPool:
     def submit(
         self, request: MemoryRequest, *, now: float,
     ) -> List["MemoryRequest"]:
-        """Submit an ARRIVAL; return earliest-finishing requests."""
+        """Submit an ARRIVAL; return predictions for all active requests.
+
+        Forwards to the owning engine (write requests are allocated first).
+        See ``MemoryEngine.submit``: every active request on the owning
+        engine is returned with its predicted ``metrics``.
+        """
         if request.req_type == MemoryRequestType.KWRITE:
             if request.addr is not None:
                 raise ValueError(
@@ -219,7 +224,11 @@ class MemoryPool:
     def finish(
         self, rid: str, engine_id: int, now: float,
     ) -> List["MemoryRequest"]:
-        """Handle a FINISH event: forward to the owning engine."""
+        """Handle a FINISH event; return predictions for the surviving requests.
+
+        Forwards to the owning engine (which pops *rid* — the fired event is
+        its latest prediction — and reallocates).  Empty list = engine idle.
+        """
         return self.get_engine(engine_id).finish(rid, now)
 
     def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":

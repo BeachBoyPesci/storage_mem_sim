@@ -286,3 +286,64 @@ class TestThreeEventOrdering:
         m = {m.source_id: m for m in result.request_metrics}
         assert m["A"].finish_time > m["A"].standalone_time
         assert m["B"].finish_time > m["B"].standalone_time
+
+
+class TestEarlyFireEndToEnd:
+    def test_stale_finish_event_refused_and_rescheduled(self):
+        """DES-level regression: a smaller later arrival (B, 50 B at
+        0.9*T) makes the in-flight request's (A, 1000 B) queued FINISH fire
+        early at T.  The engine refuses the pop and the simulator
+        reschedules — A must NOT complete prematurely and no byte is lost.
+
+        Timeline (T = 1000/peak): A solo @0 → A's event @T.  B @0.9*T leaves
+        A 100 B and becomes earliest @T.  A's stale event fires first (seq
+        order) → refused, re-predicted @1.1*T under the half split; B
+        completes @T and A regains full bandwidth → re-predicted @1.05*T
+        (superseding the refused @1.1*T).  Makespan == total_bytes / peak.
+        """
+        peak = 100.0 * _GIB
+        T = 1000.0 / peak
+        pool = _pool_with_ports(1, capacity=1.0, bandwidth=100.0)
+        sim = SimpleSimulator(pool)
+        aA, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        aB, _ = pool.get_tensor_addr(50, mem_engine_id=0)
+        sim.schedule_arrival(time=0.0, source_id="A", size_bytes=1000,
+                             addr=aA)
+        sim.schedule_arrival(time=0.9 * T, source_id="B", size_bytes=50,
+                             addr=aB)
+        result = sim.run()
+        assert len(result.request_metrics) == 2
+        m = {m.source_id: m for m in result.request_metrics}
+        # A was NOT completed early at T (would finish at 1.05*T true).
+        assert m["A"].finish_time == pytest.approx(1.05 * T)
+        assert m["B"].finish_time == pytest.approx(T)
+        # Work-conserving makespan identity: no byte lost.
+        assert result.makespan == pytest.approx((1000 + 50) / peak)
+        assert m["A"].contention_delay > 0
+        # The refused prediction @1.1*T was superseded by @1.05*T and
+        # skipped as stale.
+        assert result.stale_finish_events >= 1
+
+    def test_arrival_at_tie_instant_no_request_lost(self):
+        """Full-snapshot regression: an arrival exactly when two requests
+        complete must not drop either of them (no eager sweep loss)."""
+        peak = 100.0 * _GIB
+        T = 1000.0 / peak
+        pool = _pool_with_ports(1, capacity=1.0, bandwidth=100.0)
+        sim = SimpleSimulator(pool)
+        a1, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a2, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        a3, _ = pool.get_tensor_addr(1000, mem_engine_id=0)
+        sim.schedule_arrival(time=0.0, source_id="A", size_bytes=1000,
+                             addr=a1)
+        sim.schedule_arrival(time=0.0, source_id="B", size_bytes=1000,
+                             addr=a2)
+        # Arrives exactly at the shared completion instant of A and B.
+        sim.schedule_arrival(time=2 * T, source_id="C", size_bytes=1000,
+                             addr=a3)
+        result = sim.run()
+        assert len(result.request_metrics) == 3
+        m = {m.source_id: m for m in result.request_metrics}
+        assert m["A"].finish_time == pytest.approx(2 * T)
+        assert m["B"].finish_time == pytest.approx(2 * T)
+        assert m["C"].finish_time == pytest.approx(3 * T)
