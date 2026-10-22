@@ -4,7 +4,6 @@
         "media_type": "ramulator",
         "capacity": 128.0,
         "config": "configs/ramulator/ascend_a5_950pr_hbm.yaml",
-        "dp": 1,
         "instances": 1
     }
 }

@@ -1,30 +1,21 @@
-"""Tests for MemoryPool: global address windows, routing, event submit,
-and pool metrics."""
+"""Tests for MemoryPool: global address windows, allocation, sync routing,
+and pool-level metrics aggregation."""
 
 import pytest
 
 from ..memory_type import MemoryType, MemoryRequestType
-from ..memory_config import MemoryEngineConfig
 from ..media import (
     MediaConfig,
     MediaSystemBackend,
 )
-from ..memory_request import MemoryRequest
 from ..memory_pool import MemoryPool, MemoryPoolConfig
 
 _GIB = 1024 ** 3
 
 
-def _access(request_id, addr, size_bytes, source_id="s0"):
-    return MemoryRequest(
-        addr, size_bytes, MemoryRequestType.KREAD,
-        request_id=request_id,
-        source_id=source_id,
-    )
-
-
-def _engine_config(capacity=1.0, bandwidth=100.0):
-    return MemoryEngineConfig(
+def _pool_config(instance_count=2, capacity=1.0, bandwidth=100.0):
+    return MemoryPoolConfig(
+        instance_count=instance_count,
         memory_type=MemoryType.HBM,
         media_config=MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
@@ -36,8 +27,7 @@ def _engine_config(capacity=1.0, bandwidth=100.0):
 
 def _pool(instance_count=2, capacity=1.0, bandwidth=100.0, **kwargs):
     return MemoryPool(
-        _engine_config(capacity=capacity, bandwidth=bandwidth),
-        instance_count,
+        _pool_config(instance_count, capacity, bandwidth),
         **kwargs,
     )
 
@@ -50,30 +40,24 @@ class TestPoolAddressWindows:
 
     def test_get_tensor_addr_returns_global(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addr, _ = pool.get_tensor_addr(64)
+        addr = pool.get_tensor_addr(64)
         assert 0 <= addr < _GIB
         assert addr % 64 == 0
 
     def test_specified_engine_allocation(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addr, _ = pool.get_tensor_addr(64, mem_engine_id=1)
+        addr = pool.get_tensor_addr(64, mem_engine_id=1)
         assert _GIB <= addr < 2 * _GIB
 
     def test_round_robin_placement(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        addrs = [pool.get_tensor_addr(64)[0] for _ in range(4)]
+        addrs = [pool.get_tensor_addr(64) for _ in range(4)]
         assert [addr // _GIB for addr in addrs] == [0, 1, 0, 1]
 
-    def test_least_allocated_placement(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        addrs = [pool.get_tensor_addr(64)[0] for _ in range(3)]
-        # ROUND_ROBIN wraps: 0, 1, 0.
-        assert [addr // _GIB for addr in addrs] == [0, 1, 0]
-
-    def test_least_allocated_skips_insufficient_capacity(self):
+    def test_round_robin_skips_insufficient_capacity(self):
         pool = _pool(instance_count=2, capacity=1.0)
         pool.get_tensor_addr(_GIB)
-        addr, _ = pool.get_tensor_addr(64)
+        addr = pool.get_tensor_addr(64)
         assert _GIB <= addr < 2 * _GIB
 
     def test_window_boundary_exact_fit(self):
@@ -89,11 +73,6 @@ class TestPoolAddressWindows:
         with pytest.raises(ValueError, match="spans beyond"):
             pool.resolve_engine(_GIB - 64, 128)
 
-    def test_cross_window_submit_rejected(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        with pytest.raises(ValueError, match="spans beyond"):
-            pool.submit(_access("r1", _GIB - 32, 64), now=0.0)
-
     def test_all_instances_exhausted_raises(self):
         pool = _pool(instance_count=2, capacity=1.0)
         pool.get_tensor_addr(_GIB)
@@ -108,36 +87,79 @@ class TestPoolAddressWindows:
 
     def test_global_local_conversion_roundtrip(self):
         pool = _pool(instance_count=3, capacity=1.0)
-        addr, _ = pool.get_tensor_addr(64)
+        addr = pool.get_tensor_addr(64)
         engine = pool.resolve_engine(addr, 64)
         local = addr - engine.global_base
         assert engine.instance_id == addr // _GIB
         assert 0 <= local < _GIB
 
 
-class TestPoolSubmitRouting:
-    def test_submit_routes_by_address(self):
+class TestPoolIssueRequest:
+    def test_routes_by_address(self):
+        """Each request lands on the engine owning its global address."""
         pool = _pool(instance_count=2, capacity=1.0)
-        e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
-        e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
-        assert e1[0].metrics.request_id == "r1"
-        assert e2[0].metrics.request_id == "r2"
+        pool.issue_request(
+            [0, _GIB],
+            [1000, 2000],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        e0, e1 = pool.get_engine(0), pool.get_engine(1)
+        assert e0.get_engine_metrics().total_bytes == 1000
+        assert e1.get_engine_metrics().total_bytes == 2000
 
-    def test_submit_returns_predictions(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        entries = pool.submit(_access("r1", _GIB, 1000), now=0.0)
-        assert len(entries) == 1
-        m = entries[0].metrics
-        assert m.request_id == "r1"
-        assert m.size == 1000
-
-    def test_engine_scope_instances_independent(self):
-        """ENGINE scope: requests on different engines never contend."""
+    def test_aggregation_max_time_and_summed_bytes(self):
+        """Parallel instances: pool time = max, bandwidth = Σbytes/max_time."""
         pool = _pool(instance_count=2, capacity=1.0, bandwidth=100.0)
-        e1 = pool.submit(_access("r1", 0, 1000), now=0.0)
-        e2 = pool.submit(_access("r2", _GIB, 1000), now=0.0)
-        # Different engines: each gets full bandwidth, same finish time.
-        assert e1[0].metrics.finish_time == pytest.approx(e2[0].metrics.finish_time)
+        metrics = pool.issue_request(
+            [0, _GIB],
+            [1000, 1000],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        peak = 100.0 * _GIB
+        single_time = 1000 / peak
+        assert metrics.total_time == pytest.approx(single_time)
+        assert metrics.memory_reqs_num == 2
+        assert metrics.bandwidth == pytest.approx(2000 / single_time)
+
+    def test_single_engine_batch_matches_direct_issue(self):
+        """A batch confined to one window matches that engine's own result."""
+        pool = _pool(instance_count=2, capacity=1.0, bandwidth=100.0)
+        metrics = pool.issue_request(
+            [0, 64],
+            [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KWRITE],
+        )
+        peak = 100.0 * _GIB
+        assert metrics.total_time == pytest.approx(128 / peak)
+        assert metrics.memory_reqs_num == 2
+        # Engine 1 was never touched.
+        assert pool.get_engine(1).get_engine_metrics().total_bytes == 0
+
+    def test_empty_input_returns_empty_metrics(self):
+        pool = _pool(instance_count=2, capacity=1.0)
+        metrics = pool.issue_request([], [], [])
+        assert metrics.memory_reqs_num == 0
+        assert metrics.total_time == 0.0
+
+    def test_mismatched_lengths_rejected(self):
+        pool = _pool(instance_count=2, capacity=1.0)
+        with pytest.raises(ValueError, match="same length"):
+            pool.issue_request([0], [64, 64], [MemoryRequestType.KREAD])
+
+    def test_cross_window_issue_rejected(self):
+        pool = _pool(instance_count=2, capacity=1.0)
+        with pytest.raises(ValueError, match="spans beyond"):
+            pool.issue_request(
+                [_GIB - 32], [64], [MemoryRequestType.KREAD]
+            )
+
+    def test_analytic_iops_is_none(self):
+        pool = _pool(instance_count=2, capacity=1.0)
+        metrics = pool.issue_request(
+            [0, _GIB], [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        assert metrics.iops is None
 
 
 class TestPoolFactory:
@@ -152,7 +174,7 @@ class TestPoolFactory:
 
     def test_requires_at_least_one_engine(self):
         with pytest.raises(ValueError, match="instance_count must be >= 1"):
-            MemoryPool(_engine_config(), 0)
+            MemoryPoolConfig(instance_count=0)
 
     def test_pool_config_defaults(self):
         config = MemoryPoolConfig(instance_count=2)

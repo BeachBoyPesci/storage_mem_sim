@@ -1,6 +1,6 @@
-"""Media configuration.
+"""介质配置。
 
-Defines configuration parameters for the media simulation layer.
+定义介质仿真层的配置参数。
 """
 
 from dataclasses import dataclass, field
@@ -9,24 +9,24 @@ from .media_backend import MediaSystemBackend
 
 @dataclass
 class MediaConfig:
-    """Configuration for a media simulation backend.
+    """介质仿真后端的配置。
 
-    Attributes:
-        media_type: Which backend to use (ANALYTIC, RAMULATOR, MQSIM).
-        config_path: Path to the backend-specific configuration file
-                     (YAML for Ramulator, XML for MQSim, unused for Analytic).
-        capacity: Device capacity in GB.
-        bandwidth: Peak bandwidth in GB/s (used by Analytic backend).
-        io_frequency: I/O clock frequency in MHz (used by Ramulator to convert
-                      cycles -> time: scale_factor = 1.0 / (io_frequency * 10^6)).
-        granularity: Access granularity in bytes. For Ramulator, auto-derived
-                     from DRAM spec; fallback for other backends.
+    属性：
+        media_type: 使用哪个后端（ANALYTIC、RAMULATOR、MQSIM）。
+        config_path: 后端专属配置文件的路径
+                     （Ramulator 使用 YAML，MQSim 使用 XML，Analytic 不使用）。
+        capacity: 设备容量，单位 GB。
+        bandwidth: 峰值带宽，单位 GB/s（Analytic 后端使用）。
+        io_frequency: I/O 时钟频率，单位 MHz（Ramulator 用于将
+                      cycles 转换为时间：scale_factor = 1.0 / (io_frequency * 10^6)）。
+        granularity: 访问粒度，单位字节。Ramulator 会从 DRAM spec 自动推导；
+                     其他后端使用该值作为回退。
 
-        # MQSim-specific
-        ssd_config_path: Path to MQSim ssdconfig.xml.
-        workload_config_path: Path to MQSim workload.xml.
-        request_size_bytes: Typical request size in bytes.
-                            Large -> bandwidth-bound, small -> IOPS-bound.
+        # MQSim 专属
+        ssd_config_path: MQSim ssdconfig.xml 的路径。
+        workload_config_path: MQSim workload.xml 的路径。
+        request_size_bytes: 典型请求大小，单位字节。
+                            较大时为带宽受限（bandwidth-bound），较小时为 IOPS 受限。
     """
     media_type: MediaSystemBackend = MediaSystemBackend.ANALYTIC
     config_path: str = ""
@@ -35,7 +35,7 @@ class MediaConfig:
     io_frequency: float = 0.0
     granularity: int = 64
 
-    # MQSim-specific
+    # MQSim 专属
     ssd_config_path: str = ""
     workload_config_path: str = ""
     request_size_bytes: int = 131072
@@ -43,7 +43,7 @@ class MediaConfig:
 
     @property
     def scale_factor(self) -> float:
-        """Cycles -> seconds: 1.0 / (io_frequency * 10^6)."""
+        """Cycles -> 秒：1.0 / (io_frequency * 10^6)。"""
         if self.io_frequency > 0:
             return 1.0 / (self.io_frequency * 1e6)
         return 1.0

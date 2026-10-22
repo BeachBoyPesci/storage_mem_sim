@@ -13,7 +13,6 @@ Ramulator 后端使用 JSON 指向 YAML：
         "media_type": "ramulator",
         "capacity": 96.0,
         "config": "configs/ramulator/ascend_a5_950dt_hbm.yaml",
-        "dp": 1,
         "instances": 1
     }
 }

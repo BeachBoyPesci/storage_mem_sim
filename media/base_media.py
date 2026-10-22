@@ -1,7 +1,7 @@
-"""Abstract base class for media simulation systems.
+"""介质仿真系统的抽象基类。
 
-All media simulation backends must inherit from BaseMediaSystem and
-implement the handler_mem_request method.
+所有介质仿真后端都必须继承 BaseMediaSystem 并实现
+handler_mem_request 方法。
 """
 
 from abc import ABC, abstractmethod
@@ -14,24 +14,24 @@ from .media_metrics import MediaMetrics
 
 
 class BaseMediaSystem(ABC):
-    """Abstract base class for all media simulation backends.
+    """所有介质仿真后端的抽象基类。
 
-    Subclasses must implement handler_mem_request to process a batch of
-    MemoryRequest objects and return performance metrics.
+    子类必须实现 handler_mem_request，用于处理一批 MemoryRequest
+    对象并返回性能指标。
 
     Attributes:
-        config: Media configuration (backend type, paths, parameters).
-        system_metrics: Cumulative metrics accumulator.
+        config: 介质配置（后端类型、路径、参数）。
+        system_metrics: 累计指标累加器。
     """
 
     def __init__(self, config: MediaConfig):
-        """Initialize the media system with the given configuration.
+        """使用给定配置初始化介质系统。
 
         Args:
-            config: MediaConfig with backend settings.
+            config: 包含后端设置的 MediaConfig。
         """
         self.config = config
-        # Import here to avoid circular dependency at module load time
+        # 在此处导入以避免模块加载时的循环依赖
         from .media_metrics import MediaSystemMetrics
         self.system_metrics = MediaSystemMetrics()
 
@@ -39,25 +39,25 @@ class BaseMediaSystem(ABC):
     def handler_mem_request(
         self, mem_req_list: List["MemoryRequest"]
     ) -> MediaMetrics:
-        """Process a batch of memory requests and return performance metrics.
+        """处理一批内存请求并返回性能指标。
 
         Args:
-            mem_req_list: List of MemoryRequest objects to simulate.
+            mem_req_list: 待仿真的 MemoryRequest 对象列表。
 
         Returns:
-            MediaMetrics containing the simulation results.
+            包含仿真结果的 MediaMetrics。
         """
         ...
 
     def get_system_metrics(self):
-        """Return the cumulative system metrics.
+        """返回累计系统指标。
 
         Returns:
-            MediaSystemMetrics with accumulated history.
+            带有累计历史数据的 MediaSystemMetrics。
         """
         return self.system_metrics
 
     def reset_system_metrics(self):
-        """Reset cumulative system metrics."""
+        """重置累计系统指标。"""
         from .media_metrics import MediaSystemMetrics
         self.system_metrics = MediaSystemMetrics()

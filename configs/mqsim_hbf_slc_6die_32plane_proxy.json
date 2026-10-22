@@ -8,7 +8,6 @@
         "merge_contiguous": true,
         "request_size": 16384,
         "num_requests": 32768,
-        "dp": 1,
         "instances": 1
     }
 }

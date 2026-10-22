@@ -4,7 +4,6 @@
         "media_type": "ramulator",
         "capacity": 32.0,
         "config": "configs/ramulator.yaml",
-        "dp": 1,
         "instances": 1
     }
 }

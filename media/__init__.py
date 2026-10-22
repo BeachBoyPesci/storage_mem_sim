@@ -1,9 +1,9 @@
-"""MediaSystem — Multi-backend memory/storage simulation layer.
+"""MediaSystem — 多后端内存/存储仿真层。
 
-Provides pluggable backends for memory/storage performance simulation:
-- AnalyticMediaSystem: Pure analytical roofline estimation
-- RamulatorMediaSystem: Cycle-accurate DRAM simulation via Ramulator2
-- MQSimMediaSystem: Event-driven SSD simulation via MQSim
+为内存/存储性能仿真提供可插拔的后端：
+- AnalyticMediaSystem：纯解析式 roofline 估算
+- RamulatorMediaSystem：基于 Ramulator2 的周期精确 DRAM 仿真
+- MQSimMediaSystem：基于 MQSim 的事件驱动 SSD 仿真
 """
 
 from .media_backend import MediaSystemBackend

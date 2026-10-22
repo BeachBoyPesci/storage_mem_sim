@@ -1,10 +1,9 @@
-"""Memory engine configuration.
+"""内存引擎配置。
 
-Defines the configuration parameters for the MemoryEngine.
-Capacity values are auto-derived from media_config.capacity.
+定义 MemoryEngine 的配置参数。
+容量值从 media_config.capacity 自动派生。
 """
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -13,67 +12,31 @@ from .memory_type import MemoryType
 
 @dataclass
 class MemoryEngineConfig:
-    """Configuration for MemoryEngine.
+    """MemoryEngine 的配置。
 
     Attributes:
-        memory_type: Type of memory (HBM, DDR, SSD).
-        media_config: Media backend configuration. The MemoryEngine uses
-                      MediaSystemFactory.create(media_config) internally.
-                      Must set media_config.capacity (GB).
-        granularity: Address alignment granularity in bytes. For Ramulator,
-                     auto-derived from DRAM spec; fallback for other backends.
-        dp_size: Deprecated. Data-parallel replication is no longer
-                 performed by the engine; only the value 1 is supported
-                 without warning. Use MemoryPool / explicit workload-level
-                 replication instead.
-        storage_instance_num: Deprecated. Instance distribution is no
-                              longer performed by the engine; only the
-                              value 1 is supported without warning. Use
-                              MemoryPool instead.
+        memory_type: 内存/存储介质类型（HBM、DDR、SSD、HBF）。仅作元数据
+                     记录（日志、报告），不影响仿真行为。
+        media_config: 介质后端配置。MemoryEngine 内部通过
+                      MediaSystemFactory.create(media_config) 使用它。
+                      必须设置 media_config.capacity（GB）。
+        granularity: 地址对齐粒度，单位为字节。对 Ramulator 从 DRAM spec
+                     自动派生；其他后端以此作为回退值。
 
-    Auto-computed (from media_config.capacity, single-instance semantics):
-        total_capacity: Instance capacity in bytes (= capacity_GB * 1024**3).
-        per_dp_capacity: Equal to total_capacity (retained for
-                         compatibility).
-        capacity: Equal to total_capacity.
+    自动计算（从 media_config.capacity 派生，单实例口径）：
+        capacity: 实例容量，单位为字节（= capacity_GB * 1024**3）。
     """
+    # TODO: memory_type 是调用方自声明的标签，与后端实际仿真的器件没有
+    # 一致性校验——ramulator 的器件由 YAML preset 决定、mqsim 固定为 SSD，
+    # 声明值可能与二者矛盾（如 memory_type=SSD 配 ramulator 后端）。
+    # 出报告时应同时记录后端类型，或改为由后端自报介质信息。
     memory_type: MemoryType = MemoryType.HBM
-    media_config: Optional[object] = None   # MediaConfig, set before use
-    granularity: int = field(default=0, init=False)  # set by MemoryEngine from backend
-    dp_size: int = 1
-    storage_instance_num: int = 1
+    media_config: Optional[object] = None   # MediaConfig，使用前必须设置
+    granularity: int = field(default=0, init=False)  # 由 MemoryEngine 根据后端设置
 
-    # Auto-computed in __post_init__ from media_config.capacity
-    total_capacity: int = field(default=0, init=False)
-    per_dp_capacity: int = field(default=0, init=False)
+    # 在 __post_init__ 中根据 media_config.capacity 自动计算
     capacity: int = field(default=0, init=False)
 
     def __post_init__(self):
-        if self.dp_size < 1:
-            raise ValueError(f"dp_size must be >= 1, got {self.dp_size}")
-        if self.storage_instance_num < 1:
-            raise ValueError(f"storage_instance_num must be >= 1, got {self.storage_instance_num}")
-        if self.dp_size != 1:
-            warnings.warn(
-                f"dp_size={self.dp_size} is deprecated: MemoryEngine no "
-                "longer replicates requests. Replication must be expressed "
-                "by the workload layer or MemoryPool.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        if self.storage_instance_num != 1:
-            warnings.warn(
-                f"storage_instance_num={self.storage_instance_num} is "
-                "deprecated: MemoryEngine is a single physical instance. "
-                "Use MemoryPool for multi-instance setups.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         if self.media_config is not None:
-            # Single-instance semantics: all derived capacities equal the
-            # media_config capacity (no division by dp/instances anymore).
-            total_capacity = int(self.media_config.capacity * 1024 ** 3)
-            self.total_capacity = total_capacity
-            self.per_dp_capacity = total_capacity
-            self.capacity = total_capacity
+            self.capacity = int(self.media_config.capacity * 1024 ** 3)

@@ -1,39 +1,35 @@
-"""MemoryPool — multi-instance addressing, routing, and pool metrics."""
+"""MemoryPool — 多实例地址管理、路由与池级指标。"""
 
 import bisect
 import dataclasses
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from ..memory_request import MemoryRequest
-from ..memory_type import MemoryRequestType
+from ..memory_config import MemoryEngineConfig
+from ..memory_metrics import MemoryMetrics
+from ..memory_type import MemoryRequestType, MemoryType
 
 if TYPE_CHECKING:
-    from ..memory_config import MemoryEngineConfig
     from ..memory_engine import MemoryEngine
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class _EngineDesc:
-    """Internal descriptor of one pool instance."""
-
-    engine: "MemoryEngine"
-    global_base: int
-    capacity_bytes: int
-
-
 @dataclass
 class MemoryPoolConfig:
-    """Configuration for a MemoryPool.
+    """MemoryPool 的配置，多实例场景的统一配置入口。
 
     Attributes:
-        instance_count: Number of instances (>= 1).
+        instance_count: 实例数量（>= 1）。
+        memory_type: 介质类型元数据（透传给各 engine，不影响仿真行为）。
+        media_config: **单实例（每引擎）口径**的介质后端配置。多实例时
+                      总容量 ÷ 实例数的换算由调用方（如 run.py）完成。
     """
 
-    instance_count: int
+    instance_count: int = 1
+    memory_type: MemoryType = MemoryType.HBM
+    media_config: Optional[object] = None   # MediaConfig，使用前必须设置
 
     def __post_init__(self):
         if self.instance_count < 1:
@@ -43,78 +39,72 @@ class MemoryPoolConfig:
 
 
 class MemoryPool:
-    """A pool of MemoryEngine instances with a global address space.
+    """由多个 MemoryEngine 实例组成、共享全局地址空间的池。
 
-    The pool owns the global byte address space: each instance gets a fixed
-    non-overlapping window ``[global_base, global_base + capacity)``. All
-    pool-level addresses are global; instance-local addresses are derived
-    by subtracting the window base.
+    池拥有全局字节地址空间：每个实例获得一个固定且不重叠的窗口
+    ``[global_base, global_base + capacity)``，窗口信息（基址、容量）
+    直接保存在 engine 上（``global_base`` / ``capacity_bytes``）。所有
+    池级地址均为全局地址；实例本地地址通过减去窗口基址得到。
 
-    A request always targets the instance its data was placed on
-    (allocation-time placement, not per-request balancing). Phase 1 does not
-    support striping, migration, or replication across instances.
+    请求总是发往其数据所在放置的实例（分配期放置，而非逐请求均衡）。
+    不支持跨实例的条带化、迁移或复制。
+
+    池通过 ``issue_request()`` 接收成批请求，按地址窗口把每个请求路由到
+    所属的 engine，并按并行语义聚合各 engine 的结果：池级 ``time`` 取
+    各实例时间的最大值，池级 ``bandwidth`` 为总字节数除以该最大时间。
     """
 
-    def __init__(
-        self,
-        engine_config: "MemoryEngineConfig",
-        instance_count: int = 1,
-    ):
-        """Build a pool of *instance_count* identical engines.
+    def __init__(self, config: MemoryPoolConfig):
+        """按 *config* 构建由同构 engine 组成的池。
 
-        TODO(phase-2): support pluggable allocation policies
-        (LEAST_ALLOCATED, weighted, etc.).  Currently hard-coded to
-        ROUND_ROBIN.
+        每个实例的 ``MemoryEngineConfig`` 由 pool 内部从
+        ``config.memory_type`` / ``config.media_config`` 派生。
 
-        TODO(phase-2): support heterogeneous instances (different
-        capacities / bandwidths per engine).
+        TODO(phase-2): 支持可插拔的分配策略
+        （LEAST_ALLOCATED、加权等）。当前固定为 ROUND_ROBIN。
+
+        TODO(phase-2): 支持异构实例（各 engine 容量/带宽不同）。
         """
-        if instance_count < 1:
-            raise ValueError(
-                f"instance_count must be >= 1, got {instance_count}"
-            )
+        engine_config = MemoryEngineConfig(
+            memory_type=config.memory_type,
+            media_config=config.media_config,
+        )
 
-        # Build engines.
-        self._engines: List[_EngineDesc] = []
+        # 构建各 engine，窗口基址直接记录在 engine.global_base 上。
+        self._engines: List["MemoryEngine"] = []
         base = 0
-        for idx in range(instance_count):
+        for idx in range(config.instance_count):
             cfg = dataclasses.replace(engine_config) if idx > 0 else engine_config
             from ..memory_engine import MemoryEngine
             engine = MemoryEngine(cfg)
             engine.instance_id = idx
             engine.global_base = base
-            self._engines.append(_EngineDesc(
-                engine=engine,
-                global_base=base,
-                capacity_bytes=engine.capacity_bytes,
-            ))
+            self._engines.append(engine)
             base += engine.capacity_bytes
 
-        self._bases = [d.global_base for d in self._engines]
+        self._bases = [e.global_base for e in self._engines]
         self._rr_counter = 0
 
-        # TODO(phase-2): POOL scope — shared bandwidth across engines.
-
     # ------------------------------------------------------------------
-    # Accessors
+    # 访问器
     # ------------------------------------------------------------------
 
     @property
     def instances(self) -> tuple:
-        """Tuple of the pool's MemoryEngine instances."""
-        return tuple(d.engine for d in self._engines)
+        """池中全部 MemoryEngine 实例组成的元组。"""
+        return tuple(self._engines)
 
     def get_engine(self, engine_id: int) -> "MemoryEngine":
-        """Return the engine with the given instance id."""
+        """返回给定实例 id 对应的 engine。"""
         if not 0 <= engine_id < len(self._engines):
             raise IndexError(
                 f"engine_id {engine_id} out of range for "
                 f"{len(self._engines)} instances"
             )
-        return self._engines[engine_id].engine
+        return self._engines[engine_id]
 
     def resolve_engine(self, addr: int, size_bytes: int) -> "MemoryEngine":
-        """Resolve a global address range to its owning engine."""
+        """把一段全局地址区间解析为拥有它的 engine。"""
         if addr < 0:
             raise ValueError(f"addr must be >= 0, got {addr}")
         if size_bytes <= 0:
@@ -122,19 +112,19 @@ class MemoryPool:
         idx = bisect.bisect_right(self._bases, addr) - 1
         if idx < 0:
             raise ValueError(f"addr {addr} is below the first window (base=0)")
-        desc = self._engines[idx]
+        engine = self._engines[idx]
         end = addr + size_bytes
-        if end > desc.global_base + desc.capacity_bytes:
+        if end > engine.global_base + engine.capacity_bytes:
             raise ValueError(
                 f"request [0x{addr:x}, 0x{end:x}) spans beyond instance "
-                f"{idx} window [0x{desc.global_base:x}, "
-                f"0x{desc.global_base + desc.capacity_bytes:x}); "
+                f"{idx} window [0x{engine.global_base:x}, "
+                f"0x{engine.global_base + engine.capacity_bytes:x}); "
                 "a request must fit entirely inside one instance window"
             )
-        return desc.engine
+        return engine
 
     # ------------------------------------------------------------------
-    # Allocation
+    # 分配
     # ------------------------------------------------------------------
 
     def get_tensor_addr(
@@ -142,11 +132,12 @@ class MemoryPool:
         size_bytes: int,
         *,
         mem_engine_id: Optional[int] = None,
-    ) -> Tuple[int, int]:
-        """Allocate *size_bytes* and return ``(global_addr, engine_id)``.
+    ) -> int:
+        """分配 *size_bytes* 并返回全局起始地址。
 
-        Round-robin: start at the last-selected engine and scan forward,
-        picking the first one with enough remaining capacity.
+        Round-robin：从上次选中的 engine 开始向后扫描，
+        选中第一个剩余容量足够的 engine。所属 engine 可后续通过
+        ``resolve_engine`` 从地址反查。
         """
         if size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {size_bytes}")
@@ -158,89 +149,108 @@ class MemoryPool:
                     f"mem_engine_id {mem_engine_id} out of range for "
                     f"{n} instances"
                 )
-            desc = self._engines[mem_engine_id]
-            if desc.engine.remaining_capacity_bytes < self._aligned_size(desc.engine, size_bytes):
+            engine = self._engines[mem_engine_id]
+            if engine.remaining_capacity_bytes < self._aligned_size(engine, size_bytes):
                 raise ValueError(
                     f"engine {mem_engine_id}: remaining "
-                    f"{desc.engine.remaining_capacity_bytes} B < "
+                    f"{engine.remaining_capacity_bytes} B < "
                     f"aligned {size_bytes} B"
                 )
-            local_addr = desc.engine.get_tensor_addr(size_bytes)
-            return desc.global_base + local_addr, desc.engine.instance_id
+            local_addr = engine.get_tensor_addr(size_bytes)
+            return engine.global_base + local_addr
 
-        # Round-robin: scan from _rr_counter, pick first that fits.
-        # TODO(phase-2): pluggable allocation policies.
+        # Round-robin：从 _rr_counter 开始扫描，选中第一个放得下的实例。
+        # TODO(phase-2): 可插拔分配策略。
         start = self._rr_counter % n
         for offset in range(n):
             idx = (start + offset) % n
-            desc = self._engines[idx]
-            aligned = self._aligned_size(desc.engine, size_bytes)
-            if desc.engine.remaining_capacity_bytes >= aligned:
+            engine = self._engines[idx]
+            aligned = self._aligned_size(engine, size_bytes)
+            if engine.remaining_capacity_bytes >= aligned:
                 self._rr_counter = (idx + 1) % n
-                local_addr = desc.engine.get_tensor_addr(size_bytes)
-                return desc.global_base + local_addr, desc.engine.instance_id
+                local_addr = engine.get_tensor_addr(size_bytes)
+                return engine.global_base + local_addr
 
         detail = ", ".join(
-            f"engine {i}: capacity={d.capacity_bytes}, "
-            f"remaining={d.engine.remaining_capacity_bytes}"
-            for i, d in enumerate(self._engines)
+            f"engine {i}: capacity={e.capacity_bytes}, "
+            f"remaining={e.remaining_capacity_bytes}"
+            for i, e in enumerate(self._engines)
         )
         raise ValueError(
             f"no instance has remaining capacity >= aligned {size_bytes} B; "
             f"[{detail}]"
         )
 
-
     @staticmethod
     def _aligned_size(engine: "MemoryEngine", size_bytes: int) -> int:
         return engine.align_up(size_bytes)
 
     # ------------------------------------------------------------------
-    # Event interface
+    # 同步批量路径
     # ------------------------------------------------------------------
 
-    def submit(
-        self, request: MemoryRequest, *, now: float,
-    ) -> List["MemoryRequest"]:
-        """Submit an ARRIVAL; return predictions for all active requests.
+    def issue_request(
+        self,
+        addr: List[int],
+        size: List[int],
+        req_type: List[MemoryRequestType],
+    ) -> MemoryMetrics:
+        """通过池同步执行一批请求。
 
-        Forwards to the owning engine (write requests are allocated first).
-        See ``MemoryEngine.submit``: every active request on the owning
-        engine is returned with its predicted ``metrics``.
+        三个列表必须等长，且全部使用**全局**地址。每个请求按其地址窗口
+        路由到所属的 engine（见 ``resolve_engine``）；发给各 engine 的
+        子批次使用本地地址。假定各实例并行执行，因此池级结果按如下方式
+        聚合：``total_time``/``cycles`` 取各实例最大值，
+        ``memory_reqs_num`` 求和，``bandwidth`` = 总字节数 / 最大时间
+        （精确重算），``iops`` 为各实例非 None 值之和（所有实例都为
+        None 时为 None）。
         """
-        if request.req_type == MemoryRequestType.KWRITE:
-            if request.addr is not None:
-                raise ValueError(
-                    f"write request must have addr=None, got {request.addr}"
-                )
-            _, engine_id = self.get_tensor_addr(
-                request.size, mem_engine_id=request.mem_engine_id,
+        n = len(addr)
+        if len(size) != n or len(req_type) != n:
+            raise ValueError("addr, size, req_type must have the same length")
+        if n == 0:
+            return MemoryMetrics()
+
+        per_engine: Dict[
+            int, Tuple["MemoryEngine", List[int], List[int], List[MemoryRequestType]]
+        ] = {}
+        for i in range(n):
+            engine = self.resolve_engine(addr[i], size[i])
+            local = addr[i] - engine.global_base
+            entry = per_engine.setdefault(
+                engine.instance_id, (engine, [], [], [])
             )
-            engine = self.get_engine(engine_id)
-        else:
-            engine = self._validate_request(request)
-        return engine.submit(request, now=now)
+            entry[1].append(local)
+            entry[2].append(size[i])
+            entry[3].append(req_type[i])
 
-    def finish(
-        self, rid: str, engine_id: int, now: float,
-    ) -> List["MemoryRequest"]:
-        """Handle a FINISH event; return predictions for the surviving requests.
+        total_time = 0.0
+        total_cycles = 0
+        total_reqs = 0
+        total_bytes = 0
+        iops_values: List[float] = []
+        iops_read_values: List[float] = []
+        iops_write_values: List[float] = []
+        for engine, local_addrs, sizes, types in per_engine.values():
+            m = engine.issue_request(local_addrs, sizes, types)
+            total_time = max(total_time, m.total_time)
+            total_cycles = max(total_cycles, m.cycles)
+            total_reqs += m.memory_reqs_num
+            total_bytes += sum(sizes)
+            if m.iops is not None:
+                iops_values.append(m.iops)
+            if m.iops_read is not None:
+                iops_read_values.append(m.iops_read)
+            if m.iops_write is not None:
+                iops_write_values.append(m.iops_write)
 
-        Forwards to the owning engine (which pops *rid* — the fired event is
-        its latest prediction — and reallocates).  Empty list = engine idle.
-        """
-        return self.get_engine(engine_id).finish(rid, now)
-
-    def _validate_request(self, request: MemoryRequest) -> "MemoryEngine":
-        """Validate the request and return its owning engine."""
-        engine = self.resolve_engine(request.addr, request.size)
-        if (
-            request.mem_engine_id is not None
-            and request.mem_engine_id != engine.instance_id
-        ):
-            raise ValueError(
-                f"request addr 0x{request.addr:x} belongs to engine "
-                f"{engine.instance_id}, but mem_engine_id "
-                f"{request.mem_engine_id} was specified"
-            )
-        return engine
+        return MemoryMetrics(
+            cycles=total_cycles,
+            total_time=total_time,
+            memory_reqs_num=total_reqs,
+            global_memory_reqs_num=total_reqs,
+            bandwidth=(total_bytes / total_time if total_time > 0 else 0.0),
+            iops=sum(iops_values) if iops_values else None,
+            iops_read=sum(iops_read_values) if iops_read_values else None,
+            iops_write=sum(iops_write_values) if iops_write_values else None,
+        )

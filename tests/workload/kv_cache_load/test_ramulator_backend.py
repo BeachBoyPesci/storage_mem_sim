@@ -40,7 +40,6 @@ def test_kv_workload_runs_through_native_ramulator(
                 media_type=MediaSystemBackend.RAMULATOR,
                 capacity=1.0,
             ),
-            storage_instance_num=1,
         )
     )
     generated = KVCacheLoadGenerator().generate(

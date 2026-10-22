@@ -23,7 +23,6 @@ def _engine(bandwidth_gib_per_sec=2.0):
                 capacity=1.0,
                 bandwidth=bandwidth_gib_per_sec,
             ),
-            storage_instance_num=1,
         )
     )
 

@@ -1,7 +1,6 @@
-"""Media system factory.
+"""介质系统工厂。
 
-Provides factory-pattern creation of media simulation backends based on
-the configured MediaSystemBackend type.
+根据配置中的 MediaSystemBackend 类型，以工厂模式创建介质仿真后端。
 """
 
 import logging
@@ -15,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class MediaSystemFactory:
-    """Factory for creating media simulation backend instances.
+    """用于创建介质仿真后端实例的工厂。
 
-    Usage:
+    用法：
         config = MediaConfig(media_type=MediaSystemBackend.ANALYTIC, ...)
         media_system = MediaSystemFactory.create(config)
     """
@@ -26,30 +25,30 @@ class MediaSystemFactory:
 
     @classmethod
     def register(cls, backend: MediaSystemBackend, system_cls: Type[BaseMediaSystem]):
-        """Register a backend class for the given backend type.
+        """为给定的后端类型注册对应的后端类。
 
         Args:
-            backend: The MediaSystemBackend enum value.
-            system_cls: The BaseMediaSystem subclass to associate.
+            backend: MediaSystemBackend 枚举值。
+            system_cls: 与之关联的 BaseMediaSystem 子类。
         """
         cls._backends[backend] = system_cls
 
     @classmethod
     def create(cls, config: MediaConfig) -> BaseMediaSystem:
-        """Create a media system instance based on the config's media_type.
+        """根据配置中的 media_type 创建介质系统实例。
 
         Args:
-            config: MediaConfig specifying which backend to create.
+            config: 指定要创建哪种后端的 MediaConfig。
 
         Returns:
-            An instance of the appropriate BaseMediaSystem subclass.
+            相应 BaseMediaSystem 子类的实例。
 
         Raises:
-            ValueError: If the backend type is not registered.
+            ValueError: 后端类型未注册时抛出。
         """
         backend = config.media_type
         if backend not in cls._backends:
-            # Try to auto-import backends on first use
+            # 首次使用时尝试自动导入各后端
             cls._auto_register()
         if backend not in cls._backends:
             raise ValueError(
@@ -64,7 +63,7 @@ class MediaSystemFactory:
 
     @classmethod
     def _auto_register(cls):
-        """Lazily import and register all built-in backend implementations."""
+        """惰性导入并注册所有内置后端实现。"""
         try:
             from .analytic_media_system import AnalyticMediaSystem
             cls._backends.setdefault(

@@ -1,7 +1,7 @@
-"""Media-level request data structure.
+"""介质级请求数据结构。
 
-MediaRequest represents a single access at the media simulation granularity,
-decomposed from a higher-level MemoryObject.
+MediaRequest 表示介质仿真粒度下的一次访问，由更高层的
+MemoryObject 拆分而来。
 """
 
 from dataclasses import dataclass, field
@@ -10,16 +10,16 @@ from typing import List
 
 @dataclass
 class MediaRequest:
-    """A single media-level access request.
+    """单个介质级访问请求。
 
-    Each MediaRequest corresponds to one granularity-sized chunk of a
-    higher-level MemoryObject. For DRAM simulation, this is typically a
-    cache-line access; for SSD, a sector-range access.
+    每个 MediaRequest 对应高层 MemoryObject 中一个粒度大小的数据块。
+    对 DRAM 仿真而言，通常是一次 cache line 访问；对 SSD 而言，
+    是一个 sector 范围的访问。
 
-    Attributes:
-        addr: Starting address of this access.
-        addr_vec: Vector of sub-addresses (for bank/rank-level simulation).
-        req_type: Request type (0=Read, 1=Write).
+    属性:
+        addr: 本次访问的起始地址。
+        addr_vec: 子地址向量（用于 bank/rank 级仿真）。
+        req_type: 请求类型（0=读, 1=写）。
     """
     addr: int
     req_type: int

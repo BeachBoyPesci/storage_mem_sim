@@ -4,7 +4,6 @@
         "media_type": "ramulator",
         "capacity": 2048.0,
         "config": "configs/ramulator/host_ddr4_2tb_819p2gb_per_s_3200.yaml",
-        "dp": 1,
         "instances": 1
     }
 }

@@ -240,7 +240,6 @@ Block_No_Per_Plane       = 144
 {
   "merge_contiguous": true,
   "request_size": 16384,
-  "dp": 1,
   "instances": 1
 }
 ```
@@ -281,6 +280,9 @@ Page 加载可能有 workload read amplification；小 token 访问还可能有
 生成的全部请求在一次 `MemoryEngine.issue_request()` 中提交。它不是
 `storage_instance_num=1` 和 `128` 的对比；全部实验始终使用一个 storage
 instance。
+
+> 注：`storage_instance_num` 是当时的配置字段，已在后续重构中从
+> `MemoryEngineConfig` 彻底删除；多实例语义现在由 `MemoryPool` 表达。
 
 统一参数：
 
@@ -404,6 +406,9 @@ token 就加载完整 32-token page 时，介质带宽达到 `56.3 GB/s`，但�
 - 设置 `storage_instance_num=128`；
 - 分128次顺序调用 `issue_request()`；
 - 创建128个 NVMe IO flow。
+
+（`storage_instance_num` 字段已在后续重构中删除，多实例由 `MemoryPool`
+表达；此处保留仅为说明当时的实验设置。）
 
 当前 trace 仍只有一个 NVMe flow，但所有请求的 arrival time 都是0。并发
 主要由 QD=4096、controller on-the-fly window=1024 和 192 个阵列执行资源

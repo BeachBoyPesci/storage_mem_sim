@@ -1,7 +1,7 @@
-"""Analytic media system — pure roofline estimation.
+"""Analytic 介质系统 —— 纯 roofline 估算。
 
-Computes access time as total_data_size / bandwidth. No cycle-level
-simulation. Suitable for rapid prototyping and early-stage analysis.
+按 total_data_size / bandwidth 计算访问时间，不做周期级仿真。
+适用于快速原型验证和早期阶段分析。
 """
 
 import logging
@@ -19,13 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyticMediaSystem(BaseMediaSystem):
-    """Pure analytical backend using size/bandwidth estimation.
+    """纯解析式后端，使用 size/bandwidth 进行估算。
 
-    Computes total access time as the sum of (size / bandwidth) for each
-    request. This is a zero-fidelity model — it ignores all queuing,
-    contention, scheduling, and device-level timing effects.
+    总访问时间按每个请求的 (size / bandwidth) 求和计算。这是一个零精度
+    模型 —— 忽略所有排队、争用、调度和器件级时序效应。
 
-    Usage:
+    用法：
         config = MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
             bandwidth=100.0,      # GB/s
@@ -40,20 +39,20 @@ class AnalyticMediaSystem(BaseMediaSystem):
             raise ValueError(
                 f"bandwidth must be > 0 for Analytic backend, got {config.bandwidth}"
             )
-        # Convert bandwidth from GB/s (GiB/s semantics) to B/s.
+        # 将 bandwidth 从 GB/s（GiB/s 语义）转换为 B/s。
         self._bandwidth_bytes_per_sec = config.bandwidth * (1024 ** 3)
         logger.info("Analytic backend ready: bandwidth=%.1f GB/s", config.bandwidth)
 
     def handler_mem_request(
         self, mem_req_list: List["MemoryRequest"]
     ) -> MediaMetrics:
-        """Estimate total time as total_bytes / bandwidth.
+        """按 total_bytes / bandwidth 估算总时间。
 
-        Args:
-            mem_req_list: List of MemoryRequest objects.
+        参数：
+            mem_req_list: MemoryRequest 对象列表。
 
-        Returns:
-            MediaMetrics with time and request counts populated.
+        返回：
+            填充了时间和请求计数的 MediaMetrics。
         """
         total_bytes = 0
         num_read = 0

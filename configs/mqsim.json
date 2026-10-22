@@ -7,7 +7,6 @@
         "workload_config": "configs/mqsim/default_workload.xml",
         "merge_contiguous": true,
         "request_size": 8192,
-        "dp": 1,
         "instances": 1
     }
 }

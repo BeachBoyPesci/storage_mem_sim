@@ -24,8 +24,8 @@ DRAM row 或 NAND page。完整 page 的有效数据量为：
 page_data_bytes = page_size_tokens * token_size_bytes
 ```
 
-第一版在 workload 层不排序、不合并请求，并假设
-`storage_instance_num=1`。Page 粒度对 page ID 去重是整页加载语义的一部分，
+第一版在 workload 层不排序、不合并请求，并假设单实例
+（多实例场景由 `MemoryPool` 表达）。Page 粒度对 page ID 去重是整页加载语义的一部分，
 不是相邻请求合并。请求提交到 `MemoryEngine` 后，backend 仍可按自己的既有
 配置执行 transaction 分解、trace 合并、切片或对齐；这些行为不由 workload
 修改或覆盖。

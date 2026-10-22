@@ -1,7 +1,7 @@
-"""Memory engine metrics containers.
+"""内存引擎指标容器。
 
-Defines per-request (MemoryMetrics) and cumulative (MemoryEngineMetrics)
-metrics structures for the MemoryEngine.
+为 MemoryEngine 定义单次请求（MemoryMetrics）和累计
+（MemoryEngineMetrics）两类指标结构。
 """
 
 from dataclasses import dataclass, field
@@ -10,21 +10,18 @@ from typing import List, Optional
 
 @dataclass
 class MemoryMetrics:
-    """Metrics for a single issue_request call.
+    """单次 issue_request 调用的指标。
 
     Attributes:
-        cycles: Total cycles consumed (from media backend).
-        total_time: Total time in seconds (from media backend).
-        memory_scale_factor: Scale factor applied for time conversion.
-        memory_reqs_num: Number of engine-level requests in the simulated
-                         storage instance.
-        global_memory_reqs_num: Deprecated — always equal to
-                                memory_reqs_num since MemoryEngine became
-                                a single-instance model; retained for
-                                compatibility.
-        iops: End-to-end device IOPS reported by MQSim, or None when the
-              selected backend does not provide this metric.
-        bandwidth: Bandwidth in bytes/second (from media backend).
+        cycles: 消耗的总周期数（来自介质 backend）。
+        total_time: 总时间，单位为秒（来自介质 backend）。
+        memory_scale_factor: 时间换算使用的缩放因子。
+        memory_reqs_num: 被模拟存储实例中的 engine 级请求数。
+        global_memory_reqs_num: 已弃用的兼容别名，
+                                与 memory_reqs_num 始终相等。
+        iops: MQSim 报告的端到端设备 IOPS；当所选 backend
+              不提供该指标时为 None。
+        bandwidth: 带宽，单位为字节/秒（来自介质 backend）。
     """
     cycles: int = 0
     total_time: float = 0.0
@@ -38,23 +35,19 @@ class MemoryMetrics:
 
 @dataclass
 class MemoryEngineMetrics:
-    """Cumulative metrics across all issue_request calls.
+    """跨所有 issue_request 调用的累计指标。
 
     Attributes:
-        cycles: Accumulated cycles.
-        total_time: Accumulated total time in seconds.
-        total_bytes: Accumulated bytes transferred by the simulated
-                     storage instance.
-        memory_reqs_num: Accumulated engine-level requests in the
-                         simulated storage instance.
-        global_memory_reqs_num: Deprecated — always equal to
-                                memory_reqs_num since MemoryEngine became
-                                a single-instance model; retained for
-                                compatibility.
-        mem_metrics_list: History of per-request MemoryMetrics.
-        bandwidth: Cumulative bandwidth = total_bytes / total_time (B/s).
-        iops: Time-weighted end-to-end MQSim device IOPS, or None for
-              backends that do not report device IOPS.
+        cycles: 累计周期数。
+        total_time: 累计总时间，单位为秒。
+        total_bytes: 被模拟存储实例累计传输的字节数。
+        memory_reqs_num: 被模拟存储实例中累计的 engine 级请求数。
+        global_memory_reqs_num: 已弃用的兼容别名，
+                                与 memory_reqs_num 始终相等。
+        mem_metrics_list: 每次请求的 MemoryMetrics 历史记录。
+        bandwidth: 累计带宽 = total_bytes / total_time (B/s)。
+        iops: 按时间加权的端到端 MQSim 设备 IOPS；对不报告设备
+              IOPS 的 backend 为 None。
     """
     cycles: int = 0
     total_time: float = 0.0
@@ -70,7 +63,7 @@ class MemoryEngineMetrics:
     def update(self, metrics: MemoryMetrics, total_bytes: int):
         old_time = self.total_time
 
-        # ---- additive counters ----
+        # ---- 可加性计数器 ----
         self.cycles += metrics.cycles
         self.total_time += metrics.total_time
         self.total_bytes += total_bytes
@@ -81,12 +74,11 @@ class MemoryEngineMetrics:
         if self.total_time <= 0:
             return
 
-        # ---- bandwidth: total_bytes / total_time (exact, always works) ----
+        # ---- 带宽：total_bytes / total_time（精确计算，始终有效）----
         self.bandwidth = self.total_bytes / self.total_time
 
-        # IOPS is intentionally MQSim-only.  The value is the end-to-end
-        # device rate reported for each simulation batch, so cumulative
-        # results must be weighted by the batch simulation time.
+        # IOPS 有意仅由 MQSim 提供。该值是每个仿真批次报告的端到端
+        # 设备速率，因此累计结果必须按各批次的仿真时间加权。
         self.iops = self._combine_optional_rate(
             self.iops, metrics.iops, old_time, metrics.total_time
         )

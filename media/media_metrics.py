@@ -1,7 +1,7 @@
-"""Media metrics containers.
+"""介质指标容器。
 
-Defines per-batch (MediaMetrics) and cumulative (MediaSystemMetrics)
-metrics structures for the media simulation layer.
+定义介质仿真层的单批次指标（MediaMetrics）和累计指标
+（MediaSystemMetrics）结构。
 """
 
 from dataclasses import dataclass, field
@@ -10,20 +10,19 @@ from typing import List, Optional
 
 @dataclass
 class MediaMetrics:
-    """Metrics returned by a single handler_mem_request call.
+    """单次 handler_mem_request 调用返回的指标。
 
-    Attributes:
-        num_read_requests: Number of read requests in this batch.
-        num_write_requests: Number of write requests in this batch.
-        num_other_requests: Number of other request types.
-        cycles: Total cycles consumed (filled by Ramulator backend).
-        num_media_reqs: Total number of media-level requests processed.
-        time: Simulation time in seconds (filled by Analytic/MQSim backends).
-        bandwidth: Bandwidth in bytes/second (from backend).
-        iops: End-to-end device IOPS reported by MQSim, or None when the
-              backend does not provide this metric.
-        iops_read: Read IOPS reported by MQSim.
-        iops_write: Write IOPS reported by MQSim.
+    属性：
+        num_read_requests: 本批次中的读请求数量。
+        num_write_requests: 本批次中的写请求数量。
+        num_other_requests: 其他类型请求的数量。
+        cycles: 消耗的总周期数（由 Ramulator 后端填写）。
+        num_media_reqs: 已处理的介质级请求总数。
+        time: 仿真时间，单位为秒（由 Analytic/MQSim 后端填写）。
+        bandwidth: 带宽，单位为字节/秒（来自后端）。
+        iops: MQSim 报告的端到端设备 IOPS；当后端不提供该指标时为 None。
+        iops_read: MQSim 报告的读 IOPS。
+        iops_write: MQSim 报告的写 IOPS。
     """
     num_read_requests: int = 0
     num_write_requests: int = 0
@@ -37,7 +36,7 @@ class MediaMetrics:
     iops_write: Optional[float] = None
 
     def __add__(self, other: "MediaMetrics") -> "MediaMetrics":
-        """Combine counters and time-weight rate metrics."""
+        """合并计数器，并按时间加权合率指标。"""
         total_time = self.time + other.time
 
         def combined_rate(left: float, right: float) -> float:
@@ -70,20 +69,20 @@ class MediaMetrics:
 
 @dataclass
 class MediaSystemMetrics:
-    """Cumulative metrics across multiple handler_mem_request calls.
+    """跨多次 handler_mem_request 调用的累计指标。
 
-    Attributes:
-        num_read_requests: Accumulated read count.
-        num_write_requests: Accumulated write count.
-        num_other_requests: Accumulated other count.
-        cycles: Accumulated cycles.
-        num_media_reqs: Accumulated media request count.
-        time: Accumulated time in seconds.
-        bandwidth: Accumulated bandwidth (B/s).
-        iops: Time-weighted MQSim device IOPS, or None for other backends.
-        iops_read: Time-weighted MQSim read IOPS.
-        iops_write: Time-weighted MQSim write IOPS.
-        media_metrics_list: History of per-batch MediaMetrics.
+    属性：
+        num_read_requests: 累计读请求数。
+        num_write_requests: 累计写请求数。
+        num_other_requests: 累计其他请求数。
+        cycles: 累计周期数。
+        num_media_reqs: 累计介质请求数。
+        time: 累计时间，单位为秒。
+        bandwidth: 累计带宽（B/s）。
+        iops: 按时间加权的 MQSim 设备 IOPS；其他后端为 None。
+        iops_read: 按时间加权的 MQSim 读 IOPS。
+        iops_write: 按时间加权的 MQSim 写 IOPS。
+        media_metrics_list: 各批次 MediaMetrics 的历史记录。
     """
     num_read_requests: int = 0
     num_write_requests: int = 0
@@ -100,7 +99,7 @@ class MediaSystemMetrics:
     def update_from_media(self, metrics: MediaMetrics):
         old_time = self.time
 
-        # ---- additive counters (sum across batches) ----
+        # ---- 可累加计数器（跨批次求和）----
         self.num_read_requests += metrics.num_read_requests
         self.num_write_requests += metrics.num_write_requests
         self.num_other_requests += metrics.num_other_requests
@@ -109,7 +108,7 @@ class MediaSystemMetrics:
         self.time += metrics.time
         self.media_metrics_list.append(metrics)
 
-        # ---- rate metrics (time-weighted average) ----
+        # ---- 率指标（按时间加权平均）----
         if self.time <= 0:
             return
 
@@ -129,7 +128,7 @@ class MediaSystemMetrics:
             self.bandwidth = (self.bandwidth * old_weight
                               + metrics.bandwidth * new_weight)
         else:
-            # First batch — seed with its values directly
+            # 第一个批次——直接用其值初始化
             self.iops = metrics.iops
             self.iops_read = metrics.iops_read
             self.iops_write = metrics.iops_write

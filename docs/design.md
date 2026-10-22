@@ -6,7 +6,7 @@
 
 - **Address space management** — monotonic global address allocation with alignment
 - **Request construction** — decomposition of high-level memory objects into media-level requests
-- **Request transformation** — multi-DP (Data Parallel) and multi-storage-instance distribution
+- **Multi-instance routing** — provided by `MemoryPool` on top of single-instance `MemoryEngine`
 - **Multi-backend simulation** — pluggable backends for different fidelity/performance trade-offs
 
 ### Architecture Diagram
@@ -20,12 +20,12 @@
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │               MemoryEngine (memengine/)                      │
-│  ┌───────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │ Address    │  │ Request      │  │ Request Transform    │ │
-│  │ Allocation │  │ Construction │  │ (DP/Instance Dist.)  │ │
-│  └───────────┘  └──────────────┘  └──────────┬───────────┘ │
-│                                               │             │
-│  MemoryObject ← MemoryRequest ← MediaRequest  │             │
+│  ┌───────────┐  ┌──────────────┐                            │
+│  │ Address    │  │ Request      │                            │
+│  │ Allocation │  │ Construction │                            │
+│  └───────────┘  └──────────────┘                            │
+│                                                             │
+│  MemoryObject ← MemoryRequest ← MediaRequest                │
 │  └─────────────────────────────────────────────┘            │
 │                      │ handler_mem_request                   │
 └──────────────────────┼──────────────────────────────────────┘
@@ -106,19 +106,18 @@ storage_mem_sim/
 ```python
 def get_tensor_addr(self, size: int) -> int:
     # Align to granularity (default 64B / cache line)
-    # Check against per_dp_capacity
+    # Check against mem_config.capacity
     # Return start_addr
 ```
 
 - **Alignment granularity**: configurable, default 64 bytes (cache line)
-- **Capacity check**: raises `OverflowError` if `global_addr > per_dp_capacity`
+- **Capacity check**: raises `OverflowError` if `global_addr > mem_config.capacity`
 
 ### 4.2 Request Construction Flow
 
 ```
 issue_request(addr, size, req_type)
-  → Request transformation (multi-DP / multi-storage-instance)
-  → create_request(addr, size, req_type) for each
+  → create_request(addr, size, req_type)
     → MemoryObject(addr, size, req_type, config)
     → MemoryRequest(memory_object)
   → media_system.handler_mem_request(mem_reqs)
@@ -133,15 +132,18 @@ issue_request(addr, size, req_type)
 | `MemoryRequest` | `memory_request.py` | Holds a MemoryObject; maintains `media_request_list: List[MediaRequest]` |
 | `MediaRequest` | `media/media_request.py` | Media-level request with addr, addr_vec, req_type (0=Read, 1=Write) |
 
-### 4.4 Multi-DP / Multi-Storage-Instance Transformation
+### 4.4 Single-Instance Semantics / Multi-Instance Routing
 
-When `dp_size > 1` or `storage_instance_num > 1`:
+`MemoryEngine` models exactly one physical media instance: requests are passed
+to the backend as-is, with no DP replication and no instance fan-out.
 
-1. DP0's request is replicated `dp_size` times
-2. Requests are evenly distributed across `storage_instance_num` instances
-3. Each DP rank within each instance has its own address range
+Multi-instance semantics are expressed by `memory_pool.MemoryPool`:
 
-When `dp_size = 1` and `storage_instance_num = 1`, behavior is the identity transform.
+1. The pool owns a global address space partitioned into per-instance windows.
+2. Each request is routed by address to the owning instance's `MemoryEngine`
+   (global→local address translation).
+3. Instances execute in parallel; pool-level `time = max(per-instance time)`
+   and `bandwidth = total_bytes / max_time`.
 
 ### 4.5 Configuration
 
@@ -150,10 +152,7 @@ class MemoryEngineConfig:
     memory_type: MemoryType          # HBM / DDR / SSD
     media_config: MediaConfig        # Media layer config
     granularity: int = 64            # Address alignment / split granularity (bytes)
-    dp_size: int = 1                 # Data parallel degree
-    storage_instance_num: int = 1    # Number of storage instances
-    per_dp_capacity: int             # Capacity per DP rank (bytes)
-    capacity: int                    # Current storage instance capacity (bytes)
+    capacity: int                    # Instance capacity (bytes), derived from media_config.capacity
 ```
 
 ### 4.6 Metrics
@@ -298,7 +297,6 @@ Integrates MQSim via C++ pybind11 extension (`mqsim_backend` module).
       │  align_up(size) → granularity (64B) alignment
       │  MemoryObject(addr, size, type) → media_req_num = size/64
       │  MemoryRequest(MemoryObject)
-      │  If dp>1 or instance>1: replicate + distribute
       ▼
   MediaSystem.handler_mem_request(List[MemoryRequest])
       │

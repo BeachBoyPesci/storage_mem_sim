@@ -1,8 +1,8 @@
-"""Memory request data structure.
+"""内存请求数据结构。
 
-MemoryRequest carries all the information for one logical memory access,
-including address, size, request type, and an estimate of how many
-media-level operations it decomposes into.
+MemoryRequest 承载一次逻辑内存访问的全部信息，
+包括地址、大小、请求类型，以及它分解为多少个
+介质级操作的估计值。
 """
 
 import math
@@ -11,19 +11,16 @@ from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .memory_config import MemoryEngineConfig
-    from .memory_pool.request_metrics import MemoryRequestMetrics
     from .media.media_request import MediaRequest
 from .memory_type import MemoryRequestType
 
 
 @dataclass
 class MemoryRequest:
-    """One logical memory access.
+    """一次逻辑内存访问。
 
-    Replaces the old ``MemoryObject`` wrapper — all fields are now
-    first-class on the request.  *config* may be passed at construction
-    time to auto-compute ``media_req_num``; omit it to default to 0
-    (event path).
+    构造时可传入 *config*，以便根据 engine 的 granularity
+    自动计算 ``media_req_num``。
     """
 
     size: int
@@ -32,17 +29,6 @@ class MemoryRequest:
     media_req_num: int = 0
     media_request_list: List["MediaRequest"] = field(default_factory=list)
 
-    # Event path fields.
-    request_id: str = ""
-    source_id: str = ""
-    mem_engine_id: Optional[int] = None
-
-    # Engine mutable state (event path).
-    arrival_time: float = 0.0
-    remaining_bytes: float = 0.0
-    allocated_bandwidth: float = 0.0
-    metrics: Optional["MemoryRequestMetrics"] = None
-
     def __init__(
         self,
         addr: Optional[int],
@@ -50,9 +36,6 @@ class MemoryRequest:
         req_type: MemoryRequestType,
         *,
         config: Optional["MemoryEngineConfig"] = None,
-        request_id: str = "",
-        source_id: str = "",
-        mem_engine_id: Optional[int] = None,
     ):
         if addr is not None and addr < 0:
             raise ValueError(f"addr must be >= 0 or None, got {addr}")
@@ -62,7 +45,3 @@ class MemoryRequest:
         g = config.granularity if config is not None else 64
         self.media_req_num = math.ceil(size / g) if g > 0 else 0
         self.media_request_list = []
-        self.request_id = request_id
-        self.source_id = source_id
-        self.mem_engine_id = mem_engine_id
-

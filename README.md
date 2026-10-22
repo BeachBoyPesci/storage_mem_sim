@@ -56,8 +56,4 @@ python -m storage_mem_sim.run -c storage_mem_sim/configs/mqsim.json --num-reques
 
 # 9. 多实例 Analytic 池（同步并行）
 python -m storage_mem_sim.run -c storage_mem_sim/configs/analytic_pool.json --num-requests 64 --size 131072
-
-# 10. 错峰到达的离散事件仿真（DES）
-python -m storage_mem_sim.run -c storage_mem_sim/configs/analytic_pool.json \\
-    --des-schedule storage_mem_sim/configs/des_demo.json
 ```

@@ -4,7 +4,6 @@
         "media_type": "ramulator",
         "capacity": 64.0,
         "config": "configs/ramulator/ascend_a2_hbm.yaml",
-        "dp": 1,
         "instances": 1
     }
 }

@@ -51,7 +51,6 @@ def test_kv_workload_runs_through_native_mqsim(
                 capacity=1.0,
                 request_size_bytes=131072,
             ),
-            storage_instance_num=1,
         )
     )
     generated = KVCacheLoadGenerator().generate(
