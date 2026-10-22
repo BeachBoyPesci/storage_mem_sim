@@ -14,12 +14,14 @@ _GIB = 1024 ** 3
 
 
 def _pool_config(instance_count=2, capacity=1.0, bandwidth=100.0):
+    # MemoryPoolConfig.media_config.capacity 为总容量口径；
+    # capacity 参数表示期望的每实例容量。
     return MemoryPoolConfig(
         instance_count=instance_count,
         memory_type=MemoryType.HBM,
         media_config=MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
-            capacity=capacity,
+            capacity=capacity * instance_count,
             bandwidth=bandwidth,
         ),
     )
@@ -170,6 +172,21 @@ class TestPoolFactory:
     def test_requires_at_least_one_engine(self):
         with pytest.raises(ValueError, match="instance_count must be >= 1"):
             MemoryPoolConfig(instance_count=0)
+
+    def test_config_divides_total_capacity(self):
+        """media_config.capacity is TOTAL; each engine gets an equal share."""
+        config = MemoryPoolConfig(
+            instance_count=4,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=8.0,
+                bandwidth=100.0,
+            ),
+        )
+        assert config.media_config.capacity == 2.0
+        pool = MemoryPool(config)
+        for e in pool.instances:
+            assert e.capacity_bytes == 2 * _GIB
 
     def test_pool_config_defaults(self):
         config = MemoryPoolConfig(instance_count=2)

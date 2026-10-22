@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .memory_config import MemoryEngineConfig
+    from .memory_engine import MemoryEngineConfig
     from .media.media_request import MediaRequest
 from .memory_type import MemoryRequestType
 

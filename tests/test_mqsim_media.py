@@ -16,7 +16,7 @@ import sys
 from unittest import mock
 
 from ..memory_type import MemoryRequestType
-from ..memory_config import MemoryEngineConfig
+from ..memory_engine import MemoryEngineConfig
 from ..memory_request import MemoryRequest
 from ..media import MediaConfig, MediaSystemBackend, MQSimMediaSystem
 

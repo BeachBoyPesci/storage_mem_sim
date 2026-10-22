@@ -59,11 +59,9 @@
 storage_mem_sim/
 ├── memengine/                    # Memory Engine (root level)
 │   ├── __init__.py
-│   ├── memory_engine.py          # Main engine class
-│   ├── memory_object.py          # Memory object data structure
+│   ├── memory_engine.py          # Engine config + main engine class
 │   ├── memory_request.py         # Engine-level request
 │   ├── memory_type.py            # Enums (MemoryType, RequestType)
-│   ├── memory_config.py          # Engine configuration
 │   └── memory_metrics.py         # Metrics containers
 ├── media/                        # Media System layer
 │   ├── __init__.py

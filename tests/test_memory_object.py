@@ -3,7 +3,7 @@
 import unittest
 
 from ..memory_type import MemoryType, MemoryRequestType
-from ..memory_config import MemoryEngineConfig
+from ..memory_engine import MemoryEngineConfig
 from ..memory_request import MemoryRequest
 from ..media import MediaConfig, MediaSystemBackend
 

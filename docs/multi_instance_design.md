@@ -262,9 +262,9 @@ def issue_request(
 
 关键语义：
 
-- `capacity`：`instances == 1` 时为单实例容量；`instances > 1` 时按
-  **总容量**解释，`run.py` 将其除以实例数构造每实例配置，并打印醒目
-  警告。
+- `capacity`：按**总容量**解释。`MemoryPoolConfig.__post_init__` 将其
+  除以实例数，均分后的每实例容量写回 `media_config` 再传给各 engine
+  （`instances == 1` 时除以 1，等价于单实例容量）。
 - `bandwidth`：**每实例全量带宽**，实例间不分摊——N 实例模型的聚合峰值
   约为 N × bandwidth。这是"实例相互独立"语义的一部分，不是共享介质被
   均分。

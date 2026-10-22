@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from ..memory_config import MemoryEngineConfig
+from ..memory_engine import MemoryEngineConfig
 from ..memory_metrics import MemoryMetrics
 from ..memory_type import MemoryRequestType, MemoryType
 
@@ -23,8 +23,10 @@ class MemoryPoolConfig:
     Attributes:
         instance_count: 实例数量（>= 1）。
         memory_type: 介质类型元数据（透传给各 engine，不影响仿真行为）。
-        media_config: **单实例（每引擎）口径**的介质后端配置。多实例时
-                      总容量 ÷ 实例数的换算由调用方（如 run.py）完成。
+        media_config: 介质后端配置。其 ``capacity`` 按**总容量**（GiB）
+                      解释；``__post_init__`` 会将其均分为每实例容量
+                      （capacity ÷ instance_count）后写回。``bandwidth``
+                      始终是每实例全量带宽，不均分。
     """
 
     instance_count: int = 1
@@ -36,6 +38,20 @@ class MemoryPoolConfig:
             raise ValueError(
                 f"instance_count must be >= 1, got {self.instance_count}"
             )
+        if self.media_config is not None:
+            # 总容量口径 → 每实例容量：各 engine 拿到的 media_config
+            # 已经是除完的值。
+            total_gib = self.media_config.capacity
+            per_gib = total_gib / self.instance_count
+            self.media_config = dataclasses.replace(
+                self.media_config, capacity=per_gib
+            )
+            if self.instance_count > 1:
+                logger.info(
+                    "MemoryPoolConfig: capacity=%.1f GB is TOTAL capacity; "
+                    "per-instance = %.1f / %d = %.1f GiB",
+                    total_gib, total_gib, self.instance_count, per_gib,
+                )
 
 
 class MemoryPool:

@@ -9,7 +9,7 @@ import sys
 import os
 
 from ..memory_type import MemoryType, MemoryRequestType
-from ..memory_config import MemoryEngineConfig
+from ..memory_engine import MemoryEngineConfig
 from ..memory_request import MemoryRequest
 from ..memory_engine import MemoryEngine
 from ..memory_metrics import MemoryMetrics, MemoryEngineMetrics
@@ -241,7 +241,7 @@ MemorySystem:
     def _make_request(self, addr, size, req_type):
         from ..memory_request import MemoryRequest
         from ..memory_request import MemoryRequest
-        from ..memory_config import MemoryEngineConfig
+        from ..memory_engine import MemoryEngineConfig
         return MemoryRequest(addr, size, req_type, config=MemoryEngineConfig())
 
 
@@ -365,7 +365,7 @@ MemorySystem:
             from ..media.ramulator_media_system import RamulatorMediaSystem
             from ..memory_request import MemoryRequest
             from ..memory_request import MemoryRequest
-            from ..memory_config import MemoryEngineConfig
+            from ..memory_engine import MemoryEngineConfig
 
             config = MediaConfig(
                 media_type=MediaSystemBackend.RAMULATOR,

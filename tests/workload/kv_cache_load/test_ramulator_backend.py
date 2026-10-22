@@ -3,7 +3,7 @@
 import pytest
 
 from ....media import MediaConfig, MediaSystemBackend
-from ....memory_config import MemoryEngineConfig
+from ....memory_engine import MemoryEngineConfig
 from ....memory_engine import MemoryEngine
 from ....memory_type import MemoryType
 from ....workload.kv_cache_load import (

@@ -83,8 +83,7 @@ MediaSystemFactory -> BaseMediaSystem
 
 | 模块 | 责任与关键约束 |
 | --- | --- |
-| `memory_engine.py` | 单一物理介质实例：local 地址分配、参数校验、backend 调用、同步累计指标。不要在此解析 YAML/XML 或实现多实例路由。 |
-| `memory_config.py` | Engine 配置及容量派生（单实例口径，`capacity` 单位为字节）。`media_config` 应在构造时提供。 |
+| `memory_engine.py` | `MemoryEngineConfig`（容量派生：单实例口径，`capacity` 单位为字节，`media_config` 应在构造时提供）与 `MemoryEngine`（单一物理介质实例：local 地址分配、参数校验、backend 调用、同步累计指标）。不要在此解析 YAML/XML 或实现多实例路由。 |
 | `memory_type.py` | `MemoryType` 和 `MemoryRequestType`；介质读写编码固定为 read=0、write=1。注意 MQSim trace 自身使用 read=1、write=0，由 trace 层转换。 |
 | `memory_request.py` | 一个逻辑访问的轻量容器：记录 addr/size/type，并按 engine granularity 估算 `media_req_num`（实际介质请求数以 backend 返回值为准）；可保存拆分后的 `MediaRequest`。 |
 | `memory_metrics.py` | Engine 单次/累计指标。同步累计带宽为”模拟实例传输字节数 / 累计时间”；IOPS 只透传并按时间聚合 MQSim 的端到端 device IOPS。 |
@@ -98,7 +97,7 @@ MediaSystemFactory -> BaseMediaSystem
 | `media/mqsim_wrapper/pymqsim/trace.py` | byte address 到 LBA、相邻同类型请求合并、request-size 切片、CWDP 地址布局及理论上界公式。几何函数调用前必须加载 SSD XML。 |
 | `media/mqsim_wrapper/pymqsim/workload.py` | 用模板生成 workload XML，只负责替换 trace 路径。 |
 | `media/mqsim_wrapper/pymqsim/simulator.py` / `output.py` | native binding 调用、输出文件定位与指标解析。 |
-| `run.py` | JSON 驱动的示例/CLI；`instances>1` 时创建 MemoryPool（capacity 按总容量解释并警告）；`--workload/-w` 加载 KV workload JSON。相对配置路径按当前工作目录解析。 |
+| `run.py` | JSON 驱动的示例/CLI；`instances>1` 时创建 MemoryPool（capacity 按总容量解释，由 MemoryPoolConfig 均分）；`--workload/-w` 加载 KV workload JSON。相对配置路径按当前工作目录解析。 |
 
 ## KV cache load workload
 
@@ -270,7 +269,7 @@ python -m pytest tests/workload/kv_cache_load -m mqsim_native
 - `page_data_bytes` 是单个软件 page 的有效数据量；本次 page 请求总字节数是 `unique_pages * page_data_bytes`，不要把它误写成整个 workload 的 page 大小。
 - workload 的“不合并”只约束 generator 输出。MQSim 是否继续合并由 `configs/mqsim.json` 的 `merge_contiguous` 决定，trace slice size 由同一配置的 `request_size` 决定。
 - KV CLI 状态栏中的 `Trace slice` 是 MQSim backend 参数；实际 KV 请求数以结果区的 `Requests`/`GeneratedKVCacheLoad.stats.logical_requests` 为准。
-- `MemoryEngineConfig` 的容量为**单实例口径**（`capacity`，字节）。run.py 在 `instances>1` 时把 JSON `capacity` 按总容量解释并 ÷instances 后构造每实例配置，同时打印醒目警告。
+- `MemoryEngineConfig` 的容量为**单实例口径**（`capacity`，字节）。`MemoryPoolConfig.media_config.capacity` 为**总容量**口径，config 初始化时 ÷instances 均分给各实例；带宽始终为每实例全量带宽。
 - 池级 `issue_request` 的 `time` 取各实例最大值，`bandwidth = Σbytes / max_time`（精确重算），`iops = Σ 非 None`（全 None 则 None）。
 
 ## 相关文档

@@ -33,8 +33,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     from .media import MediaConfig, MediaSystemBackend
-    from .memory_engine import MemoryEngine
-    from .memory_config import MemoryEngineConfig
+    from .memory_engine import MemoryEngine, MemoryEngineConfig
     from .memory_type import MemoryRequestType, MemoryType
     from .memory_pool import MemoryPool, MemoryPoolConfig
     from .workload.kv_cache_load import (
@@ -74,23 +73,10 @@ def main(argv=None):
     instances = mc.get("instances", 1)
 
     # ---- build MediaConfig ----
-    capacity_raw = mc.get("capacity", 32.0)
-    if instances > 1:
-        per_gib = capacity_raw / instances
-        total_gib = capacity_raw
-        print("=" * 60)
-        print(
-            f"Pool: capacity={total_gib:.1f} GB is interpreted as TOTAL "
-            f"capacity; per-instance capacity = {total_gib:.1f} / "
-            f"{instances} = {per_gib:.1f} GiB"
-        )
-        print("=" * 60)
-    else:
-        per_gib = capacity_raw
-
+    # instances > 1 时 capacity 按总容量解释，MemoryPoolConfig 内部均分。
     media_cfg = MediaConfig(
         media_type=backend,
-        capacity=per_gib,
+        capacity=mc.get("capacity", 32.0),
         bandwidth=mc.get("bandwidth", 100.0),
         config_path=os.path.abspath(mc["config"]) if mc.get("config") else "",
         # MQSim-specific
@@ -140,13 +126,17 @@ def main(argv=None):
             page_size_tokens=workload_cfg.page_size_tokens,
             page_alignment_bytes=workload_cfg.page_alignment_bytes,
         )
-        if use_pool and region_size > per_gib * (1024 ** 3):
-            raise ValueError(
-                f"KV region requires {region_size / (1024 ** 3):.2f} GiB but "
-                f"each instance only has {per_gib:.1f} GiB with "
-                f"{instances} instances. A KV region must fit entirely inside "
-                "one instance window."
+        if use_pool:
+            per_instance_gib = (
+                pool.instances[0].capacity_bytes / (1024 ** 3)
             )
+            if region_size > pool.instances[0].capacity_bytes:
+                raise ValueError(
+                    f"KV region requires {region_size / (1024 ** 3):.2f} GiB but "
+                    f"each instance only has {per_instance_gib:.1f} GiB with "
+                    f"{instances} instances. A KV region must fit entirely inside "
+                    "one instance window."
+                )
 
         if use_pool:
             base_addr = pool.get_tensor_addr(region_size)
