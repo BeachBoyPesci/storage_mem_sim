@@ -110,6 +110,20 @@ class MemoryPool:
         """池中全部 MemoryEngine 实例组成的元组。"""
         return tuple(self._engines)
 
+    @property
+    def global_addr(self) -> int:
+        """下一次分配的起始全局地址（分配水位）。
+
+        仅单实例池有确定语义；多实例池的下一次分配由 round-robin
+        决定落点，peek 无意义，应 fail-loud。
+        """
+        if len(self._engines) != 1:
+            raise RuntimeError(
+                "global_addr peek is only defined for single-instance pools"
+            )
+        e = self._engines[0]
+        return e.global_base + e.global_addr
+
     def get_engine(self, engine_id: int) -> "MemoryEngine":
         """返回给定实例 id 对应的 engine。"""
         if not 0 <= engine_id < len(self._engines):
@@ -160,7 +174,7 @@ class MemoryPool:
         for offset in range(n):
             idx = (start + offset) % n
             engine = self._engines[idx]
-            aligned = self._aligned_size(engine, size_bytes)
+            aligned = self.align_up(size_bytes)
             if engine.remaining_capacity_bytes >= aligned:
                 self._rr_counter = (idx + 1) % n
                 local_addr = engine.get_tensor_addr(size_bytes)
@@ -182,10 +196,6 @@ class MemoryPool:
         各实例同构、粒度一致，直接委托给第一个 engine 的同名方法。
         """
         return self._engines[0].align_up(size_bytes)
-
-    @staticmethod
-    def _aligned_size(engine: "MemoryEngine", size_bytes: int) -> int:
-        return engine.align_up(size_bytes)
 
     # ------------------------------------------------------------------
     # 同步批量路径
