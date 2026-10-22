@@ -62,12 +62,13 @@ class MemoryPool:
     直接保存在 engine 上（``global_base`` / ``capacity_bytes``）。所有
     池级地址均为全局地址；实例本地地址通过减去窗口基址得到。
 
-    请求总是发往其数据所在放置的实例（分配期放置，而非逐请求均衡）。
-    不支持跨实例的条带化、迁移或复制。
+    分配为**顺序全局打包**：水位单调推进，填满一个窗口后自然延伸到
+    下一个窗口，因此一个 allocation 可以跨越多个实例（engine 本地水位
+    与全局水位天然同步）。请求同样可以跨界：``issue_request()`` 按窗口
+    边界把跨界请求切成片段，分别路由到所属 engine。不支持迁移和复制。
 
-    池通过 ``issue_request()`` 接收成批请求，按地址窗口把每个请求路由到
-    所属的 engine，并按并行语义聚合各 engine 的结果：池级 ``time`` 取
-    各实例时间的最大值，池级 ``bandwidth`` 为总字节数除以该最大时间。
+    池按并行语义聚合各 engine 的结果：池级 ``time`` 取各实例时间的
+    最大值，池级 ``bandwidth`` 为总字节数除以该最大时间。
     """
 
     def __init__(self, config: MemoryPoolConfig):
@@ -76,8 +77,8 @@ class MemoryPool:
         每个实例的 ``MemoryEngineConfig`` 由 pool 内部从
         ``config.memory_type`` / ``config.media_config`` 派生。
 
-        TODO(phase-2): 支持可插拔的分配策略
-        （LEAST_ALLOCATED、加权等）。当前固定为 ROUND_ROBIN。
+        TODO(phase-2): 支持可插拔的分配策略（LEAST_ALLOCATED、加权、
+        段表条带化等）。当前固定为顺序全局打包。
 
         TODO(phase-2): 支持异构实例（各 engine 容量/带宽不同）。
         """
@@ -99,7 +100,7 @@ class MemoryPool:
             base += engine.capacity_bytes
 
         self._bases = [e.global_base for e in self._engines]
-        self._rr_counter = 0
+        self._total_capacity = base
 
     # ------------------------------------------------------------------
     # 访问器
@@ -111,18 +112,18 @@ class MemoryPool:
         return tuple(self._engines)
 
     @property
+    def total_capacity_bytes(self) -> int:
+        """池的总容量（字节），即各实例窗口容量之和。"""
+        return self._total_capacity
+
+    @property
     def global_addr(self) -> int:
         """下一次分配的起始全局地址（分配水位）。
 
-        仅单实例池有确定语义；多实例池的下一次分配由 round-robin
-        决定落点，peek 无意义，应 fail-loud。
+        顺序全局打包下，水位 = 各 engine 本地水位之和（前面的实例
+        填满后才轮到后面的实例），对任意实例数都有确定语义。
         """
-        if len(self._engines) != 1:
-            raise RuntimeError(
-                "global_addr peek is only defined for single-instance pools"
-            )
-        e = self._engines[0]
-        return e.global_base + e.global_addr
+        return sum(e.global_addr for e in self._engines)
 
     def get_engine(self, engine_id: int) -> "MemoryEngine":
         """返回给定实例 id 对应的 engine。"""
@@ -133,25 +134,30 @@ class MemoryPool:
             )
         return self._engines[engine_id]
 
-    def resolve_engine(self, addr: int, size_bytes: int) -> "MemoryEngine":
-        """把一段全局地址区间解析为拥有它的 engine。"""
+    def _split_range(self, addr: int, size_bytes: int):
+        """把全局区间按窗口边界切成 ``(engine, local_addr, frag_bytes)``。
+
+        单窗口区间只产生一个片段；跨界区间产生多个片段，按地址顺序。
+        """
         if addr < 0:
             raise ValueError(f"addr must be >= 0, got {addr}")
         if size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {size_bytes}")
-        idx = bisect.bisect_right(self._bases, addr) - 1
-        if idx < 0:
-            raise ValueError(f"addr {addr} is below the first window (base=0)")
-        engine = self._engines[idx]
         end = addr + size_bytes
-        if end > engine.global_base + engine.capacity_bytes:
+        if end > self._total_capacity:
             raise ValueError(
-                f"request [0x{addr:x}, 0x{end:x}) spans beyond instance "
-                f"{idx} window [0x{engine.global_base:x}, "
-                f"0x{engine.global_base + engine.capacity_bytes:x}); "
-                "a request must fit entirely inside one instance window"
+                f"range [0x{addr:x}, 0x{end:x}) exceeds pool capacity "
+                f"0x{self._total_capacity:x}"
             )
-        return engine
+        idx = bisect.bisect_right(self._bases, addr) - 1
+        pos = addr
+        while pos < end:
+            engine = self._engines[idx]
+            window_end = engine.global_base + engine.capacity_bytes
+            frag = min(end, window_end) - pos
+            yield engine, pos - engine.global_base, frag
+            pos += frag
+            idx += 1
 
     # ------------------------------------------------------------------
     # 分配
@@ -160,35 +166,33 @@ class MemoryPool:
     def get_tensor_addr(self, size_bytes: int) -> int:
         """分配 *size_bytes* 并返回全局起始地址。
 
-        Round-robin：从上次选中的 engine 开始向后扫描，
-        选中第一个剩余容量足够的 engine。所属 engine 可后续通过
-        ``resolve_engine`` 从地址反查。
+        顺序全局打包：从当前水位 ``global_addr`` 取一段连续全局区间，
+        溢出窗口边界的部分自然延伸到后续实例（各 engine 的本地水位
+        与全局水位保持同步）。
         """
         if size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {size_bytes}")
 
-        # Round-robin：从 _rr_counter 开始扫描，选中第一个放得下的实例。
-        # TODO(phase-2): 可插拔分配策略。
-        n = len(self._engines)
-        start = self._rr_counter % n
-        for offset in range(n):
-            idx = (start + offset) % n
-            engine = self._engines[idx]
-            aligned = self.align_up(size_bytes)
-            if engine.remaining_capacity_bytes >= aligned:
-                self._rr_counter = (idx + 1) % n
-                local_addr = engine.get_tensor_addr(size_bytes)
-                return engine.global_base + local_addr
+        aligned = self.align_up(size_bytes)
+        addr = self.global_addr
+        if addr + aligned > self._total_capacity:
+            raise ValueError(
+                f"pool capacity exhausted: watermark 0x{addr:x} + aligned "
+                f"{aligned} B exceeds total 0x{self._total_capacity:x} B"
+            )
 
-        detail = ", ".join(
-            f"engine {i}: capacity={e.capacity_bytes}, "
-            f"remaining={e.remaining_capacity_bytes}"
-            for i, e in enumerate(self._engines)
-        )
-        raise ValueError(
-            f"no instance has remaining capacity >= aligned {size_bytes} B; "
-            f"[{detail}]"
-        )
+        # 逐窗口分配片段。打包不变量保证 engine 返回的本地地址与窗口
+        # 偏移一致；不一致说明有调用方绕开 pool 直接分配过。
+        for engine, local, frag in self._split_range(addr, aligned):
+            got = engine.get_tensor_addr(frag)
+            if got != local:
+                raise RuntimeError(
+                    f"allocation invariant broken: engine "
+                    f"{engine.instance_id} watermark 0x{got:x} != expected "
+                    f"local 0x{local:x}; do not allocate on pool engines "
+                    "directly"
+                )
+        return addr
 
     def align_up(self, size_bytes: int) -> int:
         """按对齐粒度向上取整。
@@ -209,9 +213,10 @@ class MemoryPool:
     ) -> MemoryMetrics:
         """通过池同步执行一批请求。
 
-        三个列表必须等长，且全部使用**全局**地址。每个请求按其地址窗口
-        路由到所属的 engine（见 ``resolve_engine``）；发给各 engine 的
-        子批次使用本地地址。假定各实例并行执行，因此池级结果按如下方式
+        三个列表必须等长，且全部使用**全局**地址。每个请求按窗口边界
+        切成一个或多个片段（见 ``_split_range``），跨界请求的各片段
+        分别路由到所属 engine；发给各 engine 的子批次使用本地地址。
+        假定各实例并行执行，因此池级结果按如下方式
         聚合：``total_time``/``cycles`` 取各实例最大值，
         ``memory_reqs_num`` 求和，``bandwidth`` = 总字节数 / 最大时间
         （精确重算），``iops`` 为各实例非 None 值之和（所有实例都为
@@ -227,14 +232,13 @@ class MemoryPool:
             int, Tuple["MemoryEngine", List[int], List[int], List[MemoryRequestType]]
         ] = {}
         for i in range(n):
-            engine = self.resolve_engine(addr[i], size[i])
-            local = addr[i] - engine.global_base
-            entry = per_engine.setdefault(
-                engine.instance_id, (engine, [], [], [])
-            )
-            entry[1].append(local)
-            entry[2].append(size[i])
-            entry[3].append(req_type[i])
+            for engine, local, frag in self._split_range(addr[i], size[i]):
+                entry = per_engine.setdefault(
+                    engine.instance_id, (engine, [], [], [])
+                )
+                entry[1].append(local)
+                entry[2].append(frag)
+                entry[3].append(req_type[i])
 
         total_time = 0.0
         total_cycles = 0

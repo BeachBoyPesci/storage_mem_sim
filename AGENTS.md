@@ -87,7 +87,7 @@ MediaSystemFactory -> BaseMediaSystem
 | `memory_type.py` | `MemoryType` 和 `MemoryRequestType`；介质读写编码固定为 read=0、write=1。注意 MQSim trace 自身使用 read=1、write=0，由 trace 层转换。 |
 | `memory_request.py` | 一个逻辑访问的轻量容器：记录 addr/size/type，并按 engine granularity 估算 `media_req_num`（实际介质请求数以 backend 返回值为准）；可保存拆分后的 `MediaRequest`。 |
 | `memory_metrics.py` | Engine 单次/累计指标。同步累计带宽为”模拟实例传输字节数 / 累计时间”；IOPS 只透传并按时间聚合 MQSim 的端到端 device IOPS。 |
-| `memory_pool/` | 多实例管理系统：`MemoryPoolConfig` 为统一配置入口（instance_count、memory_type、单实例口径 media_config），pool 内部派生各 engine 配置；global 地址窗口、placement（当前固定 ROUND_ROBIN）、global↔local 地址转换、池级同步 `issue_request`（逐请求按地址路由到所属实例，各实例并行取 max 时间，`bandwidth = Σbytes / max_time` 精确重算）。 |
+| `memory_pool/` | 多实例管理系统：`MemoryPoolConfig` 为统一配置入口（instance_count、memory_type、总容量口径 media_config，初始化时均分），pool 内部派生各 engine 配置；global 地址窗口、顺序全局打包分配（allocation 可跨界延伸）、global↔local 地址转换、池级同步 `issue_request`（跨界请求按窗口边界切分后路由，各实例并行取 max 时间，`bandwidth = Σbytes / max_time` 精确重算）。 |
 | `media/base_media.py` | 后端抽象接口 `handler_mem_request(List[MemoryRequest]) -> MediaMetrics` 与后端累计指标。 |
 | `media/media_config.py` | 公共及 backend-specific 配置。保持公共字段的单位兼容性。 |
 | `media/media_system_factory.py` | 后端注册和惰性创建。新增后端应扩展 enum、实现类、注册逻辑和测试。 |

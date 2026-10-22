@@ -16,7 +16,8 @@
 不考虑：
 
 - Ramulator/MQSim 的跨调用竞争或在线增量仿真。
-- 一个 tensor 跨多个实例进行 stripe 放置。
+- 交错式 stripe（fragment 粒度跨实例交替放置）；顺序打包产生的
+  窗口溢出延伸不在此列。
 - 数据复制、迁移、remote request 或缓存一致性。
 - PCIe switch、网络、计算单元等多级共享资源的精确流水和仲裁；实例间的
   并行只用「各实例独立、池级时间取 max」表达。
@@ -32,12 +33,11 @@
 
 ### 2.2 职责划分
 
-下列职责不属于 `MemoryEngine`（相关字段 `dp_size` 和
-`storage_instance_num` 已从 `MemoryEngineConfig` 中彻底删除）：
+下列职责不属于 `MemoryEngine`：
 
 - DP 请求复制。
 - 实例数量管理。
-- 跨实例 round-robin。
+- 跨实例分配与路由。
 - 池级全局地址空间。
 - 池级全局请求计数。
 
@@ -134,54 +134,46 @@ def get_tensor_addr(self, size_bytes: int) -> int:
     """Allocate and return the global start address."""
 ```
 
-处理流程：
+分配策略为**顺序全局打包**：
 
-1. 由 pool allocation policy 选择实例。
-2. 调用目标 `MemoryEngine.get_tensor_addr()` 分配 local address。
-3. 将 local address 转换为 global address 并返回。
+1. 从全局水位 `global_addr`（各 engine 本地水位之和）取一段对齐后的
+   连续全局区间 `[addr, addr + aligned)`。
+2. 区间按窗口边界切成片段，逐片段调用对应
+   `MemoryEngine.get_tensor_addr()` 分配 local address。打包不变量
+   保证 engine 返回的本地地址与窗口偏移一致；不一致说明有调用方绕开
+   pool 直接分配，fail-loud 抛 `RuntimeError`。
+3. 返回全局起始地址。
 
-当前默认 ROUND_ROBIN：从上次选中的引擎开始扫描，选第一个剩余容量足够
-的。不支持 LEAST_ALLOCATED。
+因此一个 allocation 可以跨越多个实例窗口——前面的实例填满后才轮到
+后面的实例。注意取舍：小 tensor 会依次堆满 engine 0，跨实例带宽聚合
+主要靠大请求/大分配跨界获得，而不是靠放置摊开。
 
-TODO(phase-2): 可插拔分配策略。
+TODO(phase-2): 可插拔分配策略（LEAST_ALLOCATED、加权、段表条带化）。
 
-### 5.3 为什么不需要 MemoryRegion
+### 5.3 地址访问校验
 
-设计规定：
-
-- 一个 allocation 完整落在一个 MemEngine。
-- 一次访问不能跨越两个实例的 global window。
-- 不支持 stripe、迁移或副本。
-
-因此仅使用 global/local address 和固定窗口即可，不需要 `MemoryRegion`、
-`MemoryRegionSegment` 或地址片段表。如果后续支持跨实例 stripe，再单独
-引入这些结构。
-
-### 5.4 地址访问校验
-
-`MemoryPool.issue_request()` 对每个请求做校验（经 `resolve_engine`）：
+`MemoryPool.issue_request()` 对每个请求做校验（经 `_split_range`）：
 
 - `addr >= 0`。
 - `size_bytes > 0`。
-- `[addr, addr + size_bytes)` 完整位于某个实例窗口内。
-- local address 转换后不能超过实例容量。
+- `[addr, addr + size_bytes)` 不超出池总容量。
 
-不允许指定一个实例 ID，却用另一个实例窗口中的地址静默访问。
+跨界请求合法，会被切成多个窗口片段。
 
-### 5.5 一个请求只访问一个存储节点
+### 5.4 请求的实例归属由地址决定
 
 MemoryPool 的策略是数据 placement 策略，而不是每次访问时
 的负载均衡策略：
 
 ```text
-一次 allocation      -> 一个 MemoryEngine
-一次 memory request  -> 数据所属的一个 MemoryEngine
+一次 allocation      -> 一段连续全局地址（可跨多个 MemoryEngine 窗口）
+一次 memory request  -> 按地址切分，落到覆盖该区间的若干 MemoryEngine
 ```
 
 请求不会因为当前实例繁忙而动态发送到其他实例。只有后续显式支持
-stripe、数据副本或迁移时，一个逻辑请求才可能拆分到多个存储节点。
+数据副本或迁移时，一个逻辑请求才可能路由到地址以外的存储节点。
 
-### 5.6 介质带宽
+### 5.5 介质带宽
 
 每个 Engine 拥有独立的带宽资源，直接使用配置的 `bandwidth`（GB/s）。
 不区分介质带宽和传输链路带宽——如需建模传输瓶颈，可调节配置的
@@ -207,7 +199,26 @@ class MemoryRequest:
                                         # 分解后的介质请求（由 backend 填充）
 ```
 
-### 6.2 Pool 接口
+构造签名为 `MemoryRequest(addr, size, req_type, *, config=None)`：传入
+engine 的 config 时，`media_req_num` 按 `ceil(size / config.granularity)`
+现算（未传 config 时按 64 B 粒度估算）。
+
+### 6.2 Pool 配置与接口
+
+多实例场景的统一配置入口是 `MemoryPoolConfig`：
+
+```python
+@dataclass
+class MemoryPoolConfig:
+    instance_count: int = 1          # 实例数量（>= 1）
+    memory_type: MemoryType = MemoryType.HBM
+    media_config: Optional[object] = None
+                                     # capacity 按总容量解释，
+                                     # __post_init__ 均分为每实例容量
+```
+
+`MemoryPool(config)` 内部为每个实例派生 `MemoryEngineConfig` 并构建
+同构 engine。
 
 ```python
 def issue_request(
@@ -221,18 +232,27 @@ def issue_request(
 
 路由与聚合规则：
 
-1. 逐请求 `resolve_engine(addr, size)` 定位所属实例，全局地址减
-   `global_base` 得到 local address，按实例分组。
+1. 逐请求 `_split_range(addr, size)` 按窗口边界切分，每个片段的全局
+   地址减 `global_base` 得到 local address，按实例分组。
 2. 每个实例用自己的 local 子批次调用 `engine.issue_request()`，各自
    累计 `MemoryEngineMetrics`。
 3. 池级聚合（实例并行假设）：
    - `total_time` / `cycles` = 各实例最大值；
-   - `memory_reqs_num` = 各实例求和；
+   - `memory_reqs_num` = 各实例求和（跨界请求的每个片段各计一次）；
    - `bandwidth = Σbytes / max_time`（精确重算）；
    - `iops` = 各实例非 None 值求和（全 None 则为 None）。
 
 `get_tensor_addr` 返回全局起始地址；数据先通过它分配，
-后续读写使用该全局地址。所属实例可通过 `resolve_engine` 反查。
+后续读写使用该全局地址。所属实例由地址窗口算术确定
+（`bisect` 窗口基址表后减 `global_base`）。
+
+其他辅助接口：
+
+- `align_up(size_bytes) -> int`：按对齐粒度向上取整。各实例同构、
+  粒度一致，委托给第一个 engine 的同名方法。
+- `global_addr`（只读属性）：分配水位，即下一次分配的起始全局地址，
+  等于各 engine 本地水位之和，对任意实例数都有确定语义。
+- `total_capacity_bytes`（只读属性）：池总容量（各窗口容量之和）。
 
 ## 7. 指标设计
 
@@ -274,18 +294,18 @@ def issue_request(
 
 - `tests/test_memory_engine.py`：单实例回归（地址分配、对齐、容量溢出、
   同步 issue_request、累计指标）。
-- `tests/test_memory_pool.py`：地址窗口、分配策略、global↔local 换算、
-  池级路由与聚合口径、空输入/长度不匹配/跨窗口等无效输入。
+- `tests/test_memory_pool.py`：地址窗口、顺序打包与跨界分配、global↔local
+  换算、跨界请求切分、池级聚合口径、空输入/长度不匹配/越界等无效输入。
 
 ## 10. 后续工作（phase-2 及以后）
 
 - 可插拔分配策略（LEAST_ALLOCATED、加权等）。
 - 异构实例（不同容量/带宽）。
 - POOL scope 共享带宽资源。
-- 跨实例 stripe / 迁移 / 副本。
+- 跨实例交错 stripe（段表）/ 迁移 / 副本。
 
 ## 11. 最终边界
 
 - `MemoryEngine` 不知道实例数量，不做跨实例路由。
 - `MemoryPool` 不接触 DRAM/NAND 细节，不直接调用 media backend。
-- 一个请求完整落在一个实例窗口内，不跨实例拆分。
+- 分配和请求以窗口边界为切分点；片段是 backend 可见的最小路由单位。

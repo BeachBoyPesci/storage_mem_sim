@@ -46,48 +46,58 @@ class TestPoolAddressWindows:
         assert 0 <= addr < _GIB
         assert addr % 64 == 0
 
-    def test_round_robin_placement(self):
+    def test_sequential_packing_placement(self):
+        """Allocations pack into window 0 until it fills, then spill over."""
         pool = _pool(instance_count=2, capacity=1.0)
         addrs = [pool.get_tensor_addr(64) for _ in range(4)]
-        assert [addr // _GIB for addr in addrs] == [0, 1, 0, 1]
+        assert addrs == [0, 64, 128, 192]
+        assert pool.global_addr == 256
 
-    def test_round_robin_skips_insufficient_capacity(self):
+    def test_packing_spills_into_next_window(self):
         pool = _pool(instance_count=2, capacity=1.0)
         pool.get_tensor_addr(_GIB)
         addr = pool.get_tensor_addr(64)
-        assert _GIB <= addr < 2 * _GIB
+        assert addr == _GIB
+
+    def test_allocation_spans_windows(self):
+        """An allocation crossing the boundary advances both engines."""
+        pool = _pool(instance_count=2, capacity=1.0)
+        pool.get_tensor_addr(_GIB - 64)
+        addr = pool.get_tensor_addr(128)
+        assert addr == _GIB - 64
+        e0, e1 = pool.get_engine(0), pool.get_engine(1)
+        assert e0.global_addr == _GIB
+        assert e1.global_addr == 64
+        assert pool.global_addr == _GIB + 64
 
     def test_window_boundary_exact_fit(self):
+        """A request ending exactly at the boundary stays on one engine."""
         pool = _pool(instance_count=2, capacity=1.0)
-        addr = _GIB - 512
-        engine = pool.resolve_engine(addr, 512)
-        assert engine.instance_id == 0
-        with pytest.raises(ValueError, match="spans beyond"):
-            pool.resolve_engine(_GIB - 511, 512)
+        pool.issue_request([_GIB - 512], [512], [MemoryRequestType.KREAD])
+        assert pool.get_engine(0).get_engine_metrics().total_bytes == 512
+        assert pool.get_engine(1).get_engine_metrics().total_bytes == 0
 
-    def test_cross_window_request_rejected(self):
+    def test_pool_capacity_exhausted_raises(self):
         pool = _pool(instance_count=2, capacity=1.0)
-        with pytest.raises(ValueError, match="spans beyond"):
-            pool.resolve_engine(_GIB - 64, 128)
-
-    def test_all_instances_exhausted_raises(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        pool.get_tensor_addr(_GIB)
-        pool.get_tensor_addr(_GIB)
-        with pytest.raises(ValueError, match="no instance has remaining"):
+        pool.get_tensor_addr(2 * _GIB)
+        with pytest.raises(ValueError, match="pool capacity exhausted"):
             pool.get_tensor_addr(64)
+
+    def test_range_beyond_pool_rejected(self):
+        pool = _pool(instance_count=2, capacity=1.0)
+        with pytest.raises(ValueError, match="exceeds pool capacity"):
+            pool.issue_request([2 * _GIB - 32], [64], [MemoryRequestType.KREAD])
 
     def test_negative_address_rejected(self):
         pool = _pool(instance_count=1, capacity=1.0)
         with pytest.raises(ValueError, match="addr must be >= 0"):
-            pool.resolve_engine(-1, 64)
+            pool.issue_request([-1], [64], [MemoryRequestType.KREAD])
 
     def test_global_local_conversion_roundtrip(self):
         pool = _pool(instance_count=3, capacity=1.0)
         addr = pool.get_tensor_addr(64)
-        engine = pool.resolve_engine(addr, 64)
+        engine = pool.get_engine(addr // _GIB)
         local = addr - engine.global_base
-        assert engine.instance_id == addr // _GIB
         assert 0 <= local < _GIB
 
 
@@ -143,12 +153,19 @@ class TestPoolIssueRequest:
         with pytest.raises(ValueError, match="same length"):
             pool.issue_request([0], [64, 64], [MemoryRequestType.KREAD])
 
-    def test_cross_window_issue_rejected(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        with pytest.raises(ValueError, match="spans beyond"):
-            pool.issue_request(
-                [_GIB - 32], [64], [MemoryRequestType.KREAD]
-            )
+    def test_cross_window_issue_is_split(self):
+        """A request spanning the boundary is split across both engines."""
+        pool = _pool(instance_count=2, capacity=1.0, bandwidth=100.0)
+        metrics = pool.issue_request(
+            [_GIB - 32], [64], [MemoryRequestType.KREAD]
+        )
+        e0, e1 = pool.get_engine(0), pool.get_engine(1)
+        assert e0.get_engine_metrics().total_bytes == 32
+        assert e1.get_engine_metrics().total_bytes == 32
+        assert metrics.memory_reqs_num == 2
+        peak = 100.0 * _GIB
+        assert metrics.total_time == pytest.approx(32 / peak)
+        assert metrics.bandwidth == pytest.approx(64 / (32 / peak))
 
     def test_analytic_iops_is_none(self):
         pool = _pool(instance_count=2, capacity=1.0)

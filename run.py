@@ -126,17 +126,13 @@ def main(argv=None):
             page_size_tokens=workload_cfg.page_size_tokens,
             page_alignment_bytes=workload_cfg.page_alignment_bytes,
         )
-        if use_pool:
-            per_instance_gib = (
-                pool.instances[0].capacity_bytes / (1024 ** 3)
+        if use_pool and region_size > pool.total_capacity_bytes:
+            raise ValueError(
+                f"KV region requires {region_size / (1024 ** 3):.2f} GiB but "
+                f"the pool only has "
+                f"{pool.total_capacity_bytes / (1024 ** 3):.1f} GiB in total "
+                f"({instances} instances)."
             )
-            if region_size > pool.instances[0].capacity_bytes:
-                raise ValueError(
-                    f"KV region requires {region_size / (1024 ** 3):.2f} GiB but "
-                    f"each instance only has {per_instance_gib:.1f} GiB with "
-                    f"{instances} instances. A KV region must fit entirely inside "
-                    "one instance window."
-                )
 
         if use_pool:
             base_addr = pool.get_tensor_addr(region_size)
