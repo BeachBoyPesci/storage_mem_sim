@@ -176,6 +176,13 @@ class MemoryPool:
             f"[{detail}]"
         )
 
+    def align_up(self, size_bytes: int) -> int:
+        """按对齐粒度向上取整。
+
+        各实例同构、粒度一致，直接委托给第一个 engine 的同名方法。
+        """
+        return self._engines[0].align_up(size_bytes)
+
     @staticmethod
     def _aligned_size(engine: "MemoryEngine", size_bytes: int) -> int:
         return engine.align_up(size_bytes)
