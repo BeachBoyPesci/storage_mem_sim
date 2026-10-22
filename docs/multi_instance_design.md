@@ -130,21 +130,15 @@ local_addr  = global_addr - global_base[i]
 池级接口：
 
 ```python
-def get_tensor_addr(
-    self,
-    size_bytes: int,
-    *,
-    mem_engine_id: int | None = None,
-) -> int:
+def get_tensor_addr(self, size_bytes: int) -> int:
     """Allocate and return the global start address."""
 ```
 
 处理流程：
 
-1. 如果指定 `mem_engine_id`，选择对应实例。
-2. 如果未指定，由 pool allocation policy 选择实例。
-3. 调用目标 `MemoryEngine.get_tensor_addr()` 分配 local address。
-4. 将 local address 转换为 global address 并返回。
+1. 由 pool allocation policy 选择实例。
+2. 调用目标 `MemoryEngine.get_tensor_addr()` 分配 local address。
+3. 将 local address 转换为 global address 并返回。
 
 当前默认 ROUND_ROBIN：从上次选中的引擎开始扫描，选第一个剩余容量足够
 的。不支持 LEAST_ALLOCATED。

@@ -127,12 +127,7 @@ class MemoryPool:
     # 分配
     # ------------------------------------------------------------------
 
-    def get_tensor_addr(
-        self,
-        size_bytes: int,
-        *,
-        mem_engine_id: Optional[int] = None,
-    ) -> int:
+    def get_tensor_addr(self, size_bytes: int) -> int:
         """分配 *size_bytes* 并返回全局起始地址。
 
         Round-robin：从上次选中的 engine 开始向后扫描，
@@ -142,25 +137,9 @@ class MemoryPool:
         if size_bytes <= 0:
             raise ValueError(f"size_bytes must be > 0, got {size_bytes}")
 
-        n = len(self._engines)
-        if mem_engine_id is not None:
-            if not 0 <= mem_engine_id < n:
-                raise ValueError(
-                    f"mem_engine_id {mem_engine_id} out of range for "
-                    f"{n} instances"
-                )
-            engine = self._engines[mem_engine_id]
-            if engine.remaining_capacity_bytes < self._aligned_size(engine, size_bytes):
-                raise ValueError(
-                    f"engine {mem_engine_id}: remaining "
-                    f"{engine.remaining_capacity_bytes} B < "
-                    f"aligned {size_bytes} B"
-                )
-            local_addr = engine.get_tensor_addr(size_bytes)
-            return engine.global_base + local_addr
-
         # Round-robin：从 _rr_counter 开始扫描，选中第一个放得下的实例。
         # TODO(phase-2): 可插拔分配策略。
+        n = len(self._engines)
         start = self._rr_counter % n
         for offset in range(n):
             idx = (start + offset) % n

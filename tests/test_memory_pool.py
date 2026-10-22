@@ -44,11 +44,6 @@ class TestPoolAddressWindows:
         assert 0 <= addr < _GIB
         assert addr % 64 == 0
 
-    def test_specified_engine_allocation(self):
-        pool = _pool(instance_count=2, capacity=1.0)
-        addr = pool.get_tensor_addr(64, mem_engine_id=1)
-        assert _GIB <= addr < 2 * _GIB
-
     def test_round_robin_placement(self):
         pool = _pool(instance_count=2, capacity=1.0)
         addrs = [pool.get_tensor_addr(64) for _ in range(4)]
