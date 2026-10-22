@@ -25,7 +25,7 @@
 │  │ Allocation │  │ Construction │                            │
 │  └───────────┘  └──────────────┘                            │
 │                                                             │
-│  MemoryObject ← MemoryRequest ← MediaRequest                │
+│  MemoryRequest → MediaRequest                               │
 │  └─────────────────────────────────────────────┘            │
 │                      │ handler_mem_request                   │
 └──────────────────────┼──────────────────────────────────────┘
@@ -117,9 +117,7 @@ def get_tensor_addr(self, size: int) -> int:
 
 ```
 issue_request(addr, size, req_type)
-  → create_request(addr, size, req_type)
-    → MemoryObject(addr, size, req_type, config)
-    → MemoryRequest(memory_object)
+  → MemoryRequest(addr, size, req_type, config)
   → media_system.handler_mem_request(mem_reqs)
   → MemoryMetrics returned
 ```
@@ -128,8 +126,7 @@ issue_request(addr, size, req_type)
 
 | Structure | File | Purpose |
 |-----------|------|---------|
-| `MemoryObject` | `memory_object.py` | Wraps addr, size, req_type; computes `media_req_num = ceil(size/granularity)` |
-| `MemoryRequest` | `memory_request.py` | Holds a MemoryObject; maintains `media_request_list: List[MediaRequest]` |
+| `MemoryRequest` | `memory_request.py` | One logical access: addr, size, req_type; estimates `media_req_num = ceil(size/granularity)`; maintains `media_request_list: List[MediaRequest]` |
 | `MediaRequest` | `media/media_request.py` | Media-level request with addr, addr_vec, req_type (0=Read, 1=Write) |
 
 ### 4.4 Single-Instance Semantics / Multi-Instance Routing
@@ -295,8 +292,7 @@ Integrates MQSim via C++ pybind11 extension (`mqsim_backend` module).
       ▼
   MemoryEngine
       │  align_up(size) → granularity (64B) alignment
-      │  MemoryObject(addr, size, type) → media_req_num = size/64
-      │  MemoryRequest(MemoryObject)
+      │  MemoryRequest(addr, size, type, config) → media_req_num = size/64
       ▼
   MediaSystem.handler_mem_request(List[MemoryRequest])
       │

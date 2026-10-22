@@ -1,7 +1,7 @@
 """介质级请求数据结构。
 
 MediaRequest 表示介质仿真粒度下的一次访问，由更高层的
-MemoryObject 拆分而来。
+MemoryRequest 拆分而来。
 """
 
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ from typing import List
 class MediaRequest:
     """单个介质级访问请求。
 
-    每个 MediaRequest 对应高层 MemoryObject 中一个粒度大小的数据块。
+    每个 MediaRequest 对应高层 MemoryRequest 中一个粒度大小的数据块。
     对 DRAM 仿真而言，通常是一次 cache line 访问；对 SSD 而言，
     是一个 sector 范围的访问。
 

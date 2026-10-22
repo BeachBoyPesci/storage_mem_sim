@@ -135,8 +135,8 @@ def get_tensor_addr(
     size_bytes: int,
     *,
     mem_engine_id: int | None = None,
-) -> tuple[int, int]:
-    """Allocate and return (global_addr, engine_id)."""
+) -> int:
+    """Allocate and return the global start address."""
 ```
 
 处理流程：
@@ -237,8 +237,8 @@ def issue_request(
    - `bandwidth = Σbytes / max_time`（精确重算）；
    - `iops` = 各实例非 None 值求和（全 None 则为 None）。
 
-`get_tensor_addr` 返回 `(global_addr, engine_id)`；数据先通过它分配，
-后续读写使用该全局地址。
+`get_tensor_addr` 返回全局起始地址；数据先通过它分配，
+后续读写使用该全局地址。所属实例可通过 `resolve_engine` 反查。
 
 ## 7. 指标设计
 

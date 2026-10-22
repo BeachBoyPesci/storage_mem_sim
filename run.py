@@ -200,7 +200,7 @@ def main(argv=None):
     else:
         if use_pool:
             addrs = [
-                pool.get_tensor_addr(request_size)[0]
+                pool.get_tensor_addr(request_size)
                 for _ in range(num_requests)
             ]
         else:

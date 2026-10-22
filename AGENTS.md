@@ -92,7 +92,7 @@ MediaSystemFactory -> BaseMediaSystem
 | `media/base_media.py` | 后端抽象接口 `handler_mem_request(List[MemoryRequest]) -> MediaMetrics` 与后端累计指标。 |
 | `media/media_config.py` | 公共及 backend-specific 配置。保持公共字段的单位兼容性。 |
 | `media/media_system_factory.py` | 后端注册和惰性创建。新增后端应扩展 enum、实现类、注册逻辑和测试。 |
-| `media/analytic_media_system.py` | `sum(bytes) / bandwidth`。暴露只读 `media_bandwidth` / `effective_bandwidth`。 |
+| `media/analytic_media_system.py` | `sum(bytes) / bandwidth`（bandwidth 配置按 GiB/s 转 B/s）。 |
 | `media/ramulator_media_system.py` | 读取 Ramulator YAML，推导 transaction bytes/频率，按覆盖的 transaction 边界拆请求，生成临时 LD/ST trace，组装并运行 Ramulator2。多 controller 周期取最大值。 |
 | `media/mqsim_media_system.py` | 协调 SSD XML 几何加载、trace 生成、workload XML 生成、native MQSim 执行与结果映射。 |
 | `media/mqsim_wrapper/pymqsim/trace.py` | byte address 到 LBA、相邻同类型请求合并、request-size 切片、CWDP 地址布局及理论上界公式。几何函数调用前必须加载 SSD XML。 |
