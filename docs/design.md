@@ -144,7 +144,8 @@ Multi-instance semantics are expressed by `memory_pool.MemoryPool`:
 class MemoryEngineConfig:
     memory_type: MemoryType          # HBM / DDR / SSD
     media_config: MediaConfig        # Media layer config
-    granularity: int = 64            # Address alignment / split granularity (bytes)
+    granularity: int                 # init=False; derived from backend at engine init
+                                     # (Analytic/MQSim: 64 B, Ramulator: _tx_bytes)
     capacity: int                    # Instance capacity (bytes), derived from media_config.capacity
 ```
 

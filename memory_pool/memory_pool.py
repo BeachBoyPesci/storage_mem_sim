@@ -26,7 +26,9 @@ class MemoryPoolConfig:
         media_config: 介质后端配置。其 ``capacity`` 按**总容量**（GiB）
                       解释；``__post_init__`` 会将其均分为每实例容量
                       （capacity ÷ instance_count）后写回。``bandwidth``
-                      始终是每实例全量带宽，不均分。
+                      始终是每实例全量带宽，不均分。均分后的每实例容量
+                      必须是 engine 地址粒度的整数倍，否则 ``MemoryPool``
+                      构建时抛 ``ValueError``。
     """
 
     instance_count: int = 1
@@ -104,9 +106,9 @@ class MemoryPool:
                     raise ValueError(
                         f"Per-instance capacity {engine.capacity_bytes} bytes "
                         f"is not a multiple of address granularity {gran} "
-                        f"bytes (total capacity / instance_count="
-                        f"{config.instance_count}); choose a total capacity "
-                        f"that divides into {gran}-byte-aligned windows"
+                        f"bytes (instance_count={config.instance_count}); "
+                        f"choose a total capacity that divides into "
+                        f"{gran}-byte-aligned windows"
                     )
             engine.instance_id = idx
             engine.global_base = base
@@ -214,6 +216,17 @@ class MemoryPool:
         各实例同构、粒度一致，直接委托给第一个 engine 的同名方法。
         """
         return self._engines[0].align_up(size_bytes)
+
+    def reset_addr(self):
+        """将所有成员 engine 的分配水位清零。
+
+        池的全局水位是各 engine 本地水位之和，没有独立变量，因此池级
+        重置必须逐个清零成员 engine。这是唯一合法的池级重置方式：
+        单独对某个成员 engine 调 ``reset_addr()`` 会破坏打包不变量，
+        导致静默地址复用或下一次分配时 invariant 报错。
+        """
+        for engine in self._engines:
+            engine.reset_addr()
 
     # ------------------------------------------------------------------
     # 同步批量路径

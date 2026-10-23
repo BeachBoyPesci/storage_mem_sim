@@ -51,6 +51,18 @@ class TestPoolAddressWindows:
         with pytest.raises(ValueError, match="granularity"):
             MemoryPool(config)
 
+    def test_reset_addr_clears_all_engines(self):
+        """池级 reset 把全部成员 engine 的水位清零，之后可从 0 重新分配。"""
+        pool = _pool(instance_count=2, capacity=1.0)
+        pool.get_tensor_addr(_GIB + 64)  # 跨窗口：engine0 满 + engine1 64 B
+        assert pool.global_addr == _GIB + 64
+
+        pool.reset_addr()
+
+        assert pool.global_addr == 0
+        assert all(e.global_addr == 0 for e in pool.instances)
+        assert pool.get_tensor_addr(64) == 0
+
     def test_get_tensor_addr_returns_global(self):
         pool = _pool(instance_count=2, capacity=1.0)
         addr = pool.get_tensor_addr(64)

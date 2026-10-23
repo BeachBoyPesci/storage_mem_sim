@@ -176,7 +176,7 @@ MemoryPool 的策略是数据 placement 策略，而不是每次访问时
 
 ### 5.5 介质带宽
 
-每个 Engine 拥有独立的带宽资源，直接使用配置的 `bandwidth`（GB/s）。
+每个 Engine 拥有独立的带宽资源，直接使用配置的 `bandwidth`（GiB/s）。
 不区分介质带宽和传输链路带宽——如需建模传输瓶颈，可调节配置的
 bandwidth 值。
 
@@ -254,6 +254,10 @@ def issue_request(
   越界抛 `IndexError`。
 - `align_up(size_bytes) -> int`：按对齐粒度向上取整。各实例同构、
   粒度一致，委托给第一个 engine 的同名方法。
+- `reset_addr()`：把所有成员 engine 的分配水位清零（池全局水位 =
+  各 engine 水位之和，无独立变量）。这是唯一合法的池级重置方式；
+  单独重置某个成员 engine 会破坏打包不变量，导致地址复用或
+  invariant 报错。
 - `global_addr`（只读属性）：分配水位，即下一次分配的起始全局地址，
   等于各 engine 本地水位之和，对任意实例数都有确定语义。
 - `total_capacity_bytes`（只读属性）：池总容量（各窗口容量之和）。

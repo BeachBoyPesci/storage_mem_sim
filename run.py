@@ -167,10 +167,14 @@ def main(argv=None):
             if not ms.mqsim_available:
                 print(f"  Build: cd media/mqsim_wrapper && pip install -e .")
     else:
-        print(f"Bandwidth:  {mc.get('bandwidth', 100.0)} GB/s")
+        print(f"Bandwidth:  {mc.get('bandwidth', 100.0)} GiB/s")
 
-    print(f"Capacity:   {mc.get('capacity', 32.0)} GB  |  "
-          f"Inst: {instances}")
+    capacity_gib = mc.get('capacity', 32.0)
+    if use_pool:
+        print(f"Capacity:   {capacity_gib} GiB total  |  "
+              f"{capacity_gib / instances:.2f} GiB x {instances} instances")
+    else:
+        print(f"Capacity:   {capacity_gib} GiB  |  Inst: {instances}")
     if generated_workload is not None:
         print("Workload:   kv_cache_load")
         print(f"Pattern:    {workload_cfg.pattern.value}")
@@ -214,6 +218,7 @@ def main(argv=None):
     if backend == MediaSystemBackend.RAMULATOR:
         print(f"Cycles:    {metrics.cycles}")
     print(f"Time:      {metrics.total_time * 1e9:.1f} ns")
+    # 结果带宽按十进制 GB/s（1e9）打印；配置口径为 GiB/s（1024**3）。
     print(f"Bandwidth: {metrics.bandwidth / 1e9:.2f} GB/s")
 
     print("=" * 60)
