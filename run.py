@@ -169,8 +169,8 @@ def main(argv=None):
     else:
         bw = mc.get('bandwidth', 100.0)
         if use_pool:
-            print(f"Bandwidth:  {bw} GiB/s per instance  |  "
-                  f"pool peak {bw * instances} GiB/s")
+            print(f"Bandwidth:  {bw} GiB/s total  |  "
+                  f"{bw / instances:.2f} GiB/s x {instances} instances")
         else:
             print(f"Bandwidth:  {bw} GiB/s")
 

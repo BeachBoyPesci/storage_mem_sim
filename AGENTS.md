@@ -87,7 +87,7 @@ MediaSystemFactory -> BaseMediaSystem
 | `memory_type.py` | `MemoryType` 和 `MemoryRequestType`；介质读写编码固定为 read=0、write=1。注意 MQSim trace 自身使用 read=1、write=0，由 trace 层转换。 |
 | `memory_request.py` | 一个逻辑访问的轻量容器：记录 addr/size/type，并按 engine granularity 估算 `media_req_num`（实际介质请求数以 backend 返回值为准）；可保存拆分后的 `MediaRequest`。 |
 | `memory_metrics.py` | Engine 单次/累计指标。同步累计带宽为”模拟实例传输字节数 / 累计时间”；IOPS 只透传并按时间聚合 MQSim 的端到端 device IOPS。 |
-| `memory_pool/` | 多实例管理系统：`MemoryPoolConfig` 为统一配置入口（instance_count、memory_type、总容量口径 media_config，初始化时均分），pool 内部派生各 engine 配置；global 地址窗口、顺序全局打包分配（allocation 可跨界延伸）、global↔local 地址转换、池级同步 `issue_request`（跨界请求按窗口边界切分后路由，各实例并行取 max 时间，`bandwidth = Σbytes / max_time` 精确重算）。 |
+| `memory_pool/` | 多实例管理系统：`MemoryPoolConfig` 为统一配置入口（instance_count、memory_type、总容量/总带宽口径 media_config，初始化时均分），pool 内部派生各 engine 配置；global 地址窗口、顺序全局打包分配（allocation 可跨界延伸）、global↔local 地址转换、池级同步 `issue_request`（跨界请求按窗口边界切分后路由，各实例并行取 max 时间，`bandwidth = Σbytes / max_time` 精确重算）。 |
 | `media/base_media.py` | 后端抽象接口 `handler_mem_request(List[MemoryRequest]) -> MediaMetrics` 与后端累计指标。 |
 | `media/media_config.py` | 公共及 backend-specific 配置。保持公共字段的单位兼容性。 |
 | `media/media_system_factory.py` | 后端注册和惰性创建。新增后端应扩展 enum、实现类、注册逻辑和测试。 |
@@ -269,7 +269,7 @@ python -m pytest tests/workload/kv_cache_load -m mqsim_native
 - `page_data_bytes` 是单个软件 page 的有效数据量；本次 page 请求总字节数是 `unique_pages * page_data_bytes`，不要把它误写成整个 workload 的 page 大小。
 - workload 的“不合并”只约束 generator 输出。MQSim 是否继续合并由 `configs/mqsim.json` 的 `merge_contiguous` 决定，trace slice size 由同一配置的 `request_size` 决定。
 - KV CLI 状态栏中的 `Trace slice` 是 MQSim backend 参数；实际 KV 请求数以结果区的 `Requests`/`GeneratedKVCacheLoad.stats.logical_requests` 为准。
-- `MemoryEngineConfig` 的容量为**单实例口径**（`capacity`，字节）。`MemoryPoolConfig.media_config.capacity` 为**总容量**口径，config 初始化时 ÷instances 均分给各实例；带宽始终为每实例全量带宽。
+- `MemoryEngineConfig` 的容量为**单实例口径**（`capacity`，字节）。`MemoryPoolConfig.media_config` 的 `capacity` 与 `bandwidth` 均为**总量**口径，config 初始化时 ÷instances 均分给各实例；带宽均分目前只影响 Analytic 后端（Ramulator/MQSim 的带宽由器件组织/仿真决定，不消费该字段），N 实例各得 bandwidth/N 并行执行，聚合峰值 = 配置带宽。
 - 总容量 GiB 浮点均分再 `int()` 截断可能产生非对齐的每实例容量（如 4 GiB ÷ 3）：`MemoryPool` 构建时将其向下取整到地址粒度（Analytic/MQSim 64 B，Ramulator 为器件推导值）的倍数并打 warning 记录损失字节；容量小于粒度时抛 `ValueError`。
 - 池级 `issue_request` 的 `time` 取各实例最大值，`bandwidth = Σbytes / max_time`（精确重算），`iops = Σ 非 None`（全 None 则 None）。
 - 池成员 engine 不得单独调用 `reset_addr()` 或 `get_tensor_addr()`：池的全局水位是各 engine 水位之和，绕开 pool 会破坏打包不变量（静默地址复用或 invariant 报错）。池级重置统一用 `MemoryPool.reset_addr()`。

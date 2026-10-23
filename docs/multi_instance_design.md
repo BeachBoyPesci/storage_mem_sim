@@ -176,12 +176,16 @@ MemoryPool 的策略是数据 placement 策略，而不是每次访问时
 
 ### 5.5 介质带宽
 
-每个 Engine 拥有独立的带宽资源，直接使用配置的 `bandwidth`（GiB/s）。
+每个 Engine 获得配置 `bandwidth` ÷ instance_count（GiB/s）——
+`bandwidth` 按**总带宽**口径解释，`MemoryPoolConfig.__post_init__`
+与容量一起均分。这是静态分摊：各实例独立、并行执行，N 实例模型
+的聚合峰值约为配置带宽。均分目前只影响 Analytic 后端；
+Ramulator/MQSim 的带宽由器件组织/仿真决定，不消费该字段。
 不区分介质带宽和传输链路带宽——如需建模传输瓶颈，可调节配置的
 bandwidth 值。
 
-TODO(phase-2): 如果目标硬件共享传输链路，需引入 POOL scope（共享带宽
-资源）。
+TODO(phase-2): 如果目标硬件需要按负载动态共享带宽，需引入 POOL
+scope（共享带宽资源）。
 
 ## 6. 核心数据结构和接口
 
@@ -214,8 +218,8 @@ class MemoryPoolConfig:
     instance_count: int = 1          # 实例数量（>= 1）
     memory_type: MemoryType = MemoryType.HBM
     media_config: Optional[object] = None
-                                     # capacity 按总容量解释，
-                                     # __post_init__ 均分为每实例容量
+                                     # capacity / bandwidth 按总量解释，
+                                     # __post_init__ 均分为每实例值
 ```
 
 `MemoryPool(config)` 内部为每个实例派生 `MemoryEngineConfig` 并构建
@@ -296,9 +300,10 @@ def issue_request(
   截断可能产生非粒度对齐的每实例容量（如 4 GiB ÷ 3）；`MemoryPool`
   构建时将其向下取整到粒度倍数并打 warning 记录损失字节，容量
   小于粒度时抛 `ValueError`。
-- `bandwidth`：**每实例全量带宽**，实例间不分摊——N 实例模型的聚合峰值
-  约为 N × bandwidth。这是"实例相互独立"语义的一部分，不是共享介质被
-  均分。
+- `bandwidth`：按**总带宽**解释，与容量同样 ÷instances 均分给各
+  实例。N 实例模型的聚合峰值约为配置带宽（各实例实得
+  bandwidth/N，并行执行）。均分目前只影响 Analytic 后端；
+  Ramulator/MQSim 的带宽由器件组织/仿真决定，不消费该字段。
 - 单实例口径：`MemoryEngineConfig` 的 `capacity` 即实例容量（字节）。
 
 ## 9. 测试方案

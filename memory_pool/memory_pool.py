@@ -23,10 +23,12 @@ class MemoryPoolConfig:
     Attributes:
         instance_count: 实例数量（>= 1）。
         memory_type: 介质类型元数据（透传给各 engine，不影响仿真行为）。
-        media_config: 介质后端配置。其 ``capacity`` 按**总容量**（GiB）
-                      解释；``__post_init__`` 会将其均分为每实例容量
-                      （capacity ÷ instance_count）后写回。``bandwidth``
-                      始终是每实例全量带宽，不均分。均分后的每实例容量
+        media_config: 介质后端配置。其 ``capacity`` 与 ``bandwidth`` 均按
+                      **总量**口径解释；``__post_init__`` 会将其均分为
+                      每实例值（capacity ÷ instance_count、bandwidth ÷
+                      instance_count）后写回。``bandwidth`` 均分目前只
+                      影响 Analytic 后端（Ramulator/MQSim 的带宽由器件
+                      组织/仿真决定，不消费该字段）。均分后的每实例容量
                       若不是 engine 地址粒度的整数倍，``MemoryPool``
                       构建时会向下取整到粒度倍数（打 warning 记录损失
                       字节数）；容量小于粒度时抛 ``ValueError``。
@@ -42,18 +44,23 @@ class MemoryPoolConfig:
                 f"instance_count must be >= 1, got {self.instance_count}"
             )
         if self.media_config is not None:
-            # 总容量口径 → 每实例容量：各 engine 拿到的 media_config
-            # 已经是除完的值。
+            # 总容量/总带宽口径 → 每实例值：各 engine 拿到的
+            # media_config 已经是除完的值。聚合峰值 = 配置带宽
+            # （N 实例各得 bandwidth/N，并行执行）。
             total_gib = self.media_config.capacity
             per_gib = total_gib / self.instance_count
+            total_bw = self.media_config.bandwidth
+            per_bw = total_bw / self.instance_count
             self.media_config = dataclasses.replace(
-                self.media_config, capacity=per_gib
+                self.media_config, capacity=per_gib, bandwidth=per_bw
             )
             if self.instance_count > 1:
                 logger.info(
-                    "MemoryPoolConfig: capacity=%.1f GiB is TOTAL capacity; "
-                    "per-instance = %.1f / %d = %.1f GiB",
-                    total_gib, total_gib, self.instance_count, per_gib,
+                    "MemoryPoolConfig: capacity=%.1f GiB and bandwidth=%.1f "
+                    "GiB/s are TOTAL values; per-instance = %.1f/%d = %.1f "
+                    "GiB, %.1f/%d = %.1f GiB/s",
+                    total_gib, total_bw, total_gib, self.instance_count,
+                    per_gib, total_bw, self.instance_count, per_bw,
                 )
 
 

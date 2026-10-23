@@ -16,15 +16,15 @@ _GIB = 1024 ** 3
 
 
 def _pool_config(instance_count=2, capacity=1.0, bandwidth=100.0):
-    # MemoryPoolConfig.media_config.capacity 为总容量口径；
-    # capacity 参数表示期望的每实例容量。
+    # MemoryPoolConfig.media_config 的 capacity 与 bandwidth 均为总量
+    # 口径；两个参数表示期望的每实例容量/带宽，构造时乘回总量。
     return MemoryPoolConfig(
         instance_count=instance_count,
         memory_type=MemoryType.HBM,
         media_config=MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
             capacity=capacity * instance_count,
-            bandwidth=bandwidth,
+            bandwidth=bandwidth * instance_count,
         ),
     )
 
@@ -175,6 +175,31 @@ class TestPoolIssueRequest:
         assert metrics.memory_reqs_num == 2
         assert metrics.bandwidth == pytest.approx(2000 / single_time)
 
+    def test_total_bandwidth_divided_across_instances(self):
+        """总带宽均分：2 实例总量 200 GiB/s → 单实例峰值 100 GiB/s，
+        两实例并行时聚合峰值回到配置总带宽 200 GiB/s。"""
+        config = MemoryPoolConfig(
+            instance_count=2,
+            memory_type=MemoryType.HBM,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=2.0,
+                bandwidth=200.0,
+            ),
+        )
+        pool = MemoryPool(config)
+        one = pool.issue_request([0], [1000], [MemoryRequestType.KREAD])
+        peak = 100.0 * _GIB
+        assert one.total_time == pytest.approx(1000 / peak)
+
+        both = pool.issue_request(
+            [0, _GIB],
+            [1000, 1000],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        assert both.total_time == pytest.approx(1000 / peak)
+        assert both.bandwidth == pytest.approx(2000 * peak / 1000)
+
     def test_single_engine_batch_matches_direct_issue(self):
         """A batch confined to one window matches that engine's own result."""
         pool = _pool(instance_count=2, capacity=1.0, bandwidth=100.0)
@@ -251,6 +276,32 @@ class TestPoolFactory:
         pool = MemoryPool(config)
         for e in pool.instances:
             assert e.capacity_bytes == 2 * _GIB
+
+    def test_config_divides_total_bandwidth(self):
+        """media_config.bandwidth 为总带宽口径；__post_init__ 均分写回。"""
+        config = MemoryPoolConfig(
+            instance_count=4,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=8.0,
+                bandwidth=400.0,
+            ),
+        )
+        assert config.media_config.bandwidth == 100.0
+
+    def test_total_bandwidth_reaches_backend_per_instance(self):
+        """均分后的带宽真正到达每个 engine 的后端（B/s 口径）。"""
+        config = MemoryPoolConfig(
+            instance_count=2,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=2.0,
+                bandwidth=200.0,
+            ),
+        )
+        pool = MemoryPool(config)
+        for e in pool.instances:
+            assert e.media_system._bandwidth_bytes_per_sec == 100.0 * _GIB
 
     def test_pool_config_defaults(self):
         config = MemoryPoolConfig(instance_count=2)

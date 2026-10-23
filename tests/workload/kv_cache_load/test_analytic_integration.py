@@ -97,6 +97,8 @@ _PAGE_BYTES = 16 * 576  # page_size_tokens * token_size_bytes
 
 def _pool(per_instance_bytes, instance_count=2, bandwidth_gib_per_sec=2.0):
     total_gib = per_instance_bytes * instance_count / (1024 ** 3)
+    # media_config.bandwidth 为总带宽口径：乘回实例数保持每实例
+    # bandwidth_gib_per_sec 的测试语义。
     return MemoryPool(
         MemoryPoolConfig(
             instance_count=instance_count,
@@ -104,7 +106,7 @@ def _pool(per_instance_bytes, instance_count=2, bandwidth_gib_per_sec=2.0):
             media_config=MediaConfig(
                 media_type=MediaSystemBackend.ANALYTIC,
                 capacity=total_gib,
-                bandwidth=bandwidth_gib_per_sec,
+                bandwidth=bandwidth_gib_per_sec * instance_count,
             ),
         )
     )
