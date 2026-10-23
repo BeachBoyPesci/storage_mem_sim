@@ -23,7 +23,7 @@ class TestAnalyticMediaSystem(unittest.TestCase):
     def setUp(self):
         self.media_config = MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
-            bandwidth=100.0,  # 100 GB/s
+            bandwidth=100.0,  # 100 GiB/s
         )
         self.system = AnalyticMediaSystem(self.media_config)
         self.mem_config = MemoryEngineConfig(media_config=MediaConfig(media_type=MediaSystemBackend.ANALYTIC,bandwidth=100.0,capacity=1.0))
@@ -104,13 +104,13 @@ class TestAnalyticMediaSystem(unittest.TestCase):
         """Higher bandwidth → lower access time."""
         req = self._make_memory_request(0, 100 * 1024**3, MemoryRequestType.KREAD)
 
-        # 100 GB/s
+        # 100 GiB/s
         sys_100 = AnalyticMediaSystem(
             MediaConfig(media_type=MediaSystemBackend.ANALYTIC, bandwidth=100.0)
         )
         m_100 = sys_100.handler_mem_request([req])
 
-        # 200 GB/s
+        # 200 GiB/s
         sys_200 = AnalyticMediaSystem(
             MediaConfig(media_type=MediaSystemBackend.ANALYTIC, bandwidth=200.0)
         )
@@ -132,7 +132,7 @@ class TestAnalyticMediaSystem(unittest.TestCase):
         self.assertIsNone(metrics.iops_write)
 
     def test_bandwidth_bytes_per_sec(self):
-        """Bandwidth is converted from GB/s to B/s."""
+        """Bandwidth is converted from GiB/s to B/s."""
         sys = AnalyticMediaSystem(MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
             bandwidth=400.0,

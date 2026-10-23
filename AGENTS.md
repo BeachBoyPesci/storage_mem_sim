@@ -260,7 +260,7 @@ python -m pytest tests/workload/kv_cache_load -m mqsim_native
 - `MemoryEngineConfig` 的容量字段在 `__post_init__` 派生。构造后再赋 `media_config` 不会自动重算容量。
 - 多实例池假设各实例同构、独立、并行：池级 `time` 取各实例最大值，适用于均衡负载的代表性估计；不适用于异构实例或跨实例带宽共享的精确关键路径。
 - `MemoryRequest.media_req_num` 是按 engine granularity 的估计；Ramulator 的实际覆盖数由对齐后的 transaction 分解决定，MQSim 还会合并和切片。
-- Analytic 配置写作 GB/s，但实现按 GiB/s (`1024**3`) 转换；报告时必须指出口径。
+- Analytic 的 `bandwidth` 按 GiB/s（`1024**3`）解释；报告时须注明口径（CLI 结果行按十进制 GB/s 打印，与配置口径不同）。
 - MQSim XML 的 IOPS 是 trace 请求经过 NVMe/PCIe/SSD 路径后的端到端 device IOPS，不是 NAND 内部 page read/program transaction rate；Analytic 和 Ramulator 不提供 IOPS。
 - MQSim `handler_mem_request()` 会在 wrapper 的 `trace/` 下保留生成 trace/workload/output；不要把运行产物误当源码提交。
 - `configs/mqsim.json` 中的字段不一定都被 CLI 使用；新增或依赖字段前沿 `run.py -> MediaConfig -> backend` 路径确认实际生效。

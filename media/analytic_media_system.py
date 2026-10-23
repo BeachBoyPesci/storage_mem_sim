@@ -27,7 +27,7 @@ class AnalyticMediaSystem(BaseMediaSystem):
     用法：
         config = MediaConfig(
             media_type=MediaSystemBackend.ANALYTIC,
-            bandwidth=100.0,      # GB/s
+            bandwidth=100.0,      # GiB/s
         )
         sys = AnalyticMediaSystem(config)
         metrics = sys.handler_mem_request(mem_req_list)
@@ -39,9 +39,9 @@ class AnalyticMediaSystem(BaseMediaSystem):
             raise ValueError(
                 f"bandwidth must be > 0 for Analytic backend, got {config.bandwidth}"
             )
-        # 将 bandwidth 从 GB/s（GiB/s 语义）转换为 B/s。
+        # 将 bandwidth 从 GiB/s 转换为 B/s。
         self._bandwidth_bytes_per_sec = config.bandwidth * (1024 ** 3)
-        logger.info("Analytic backend ready: bandwidth=%.1f GB/s", config.bandwidth)
+        logger.info("Analytic backend ready: bandwidth=%.1f GiB/s", config.bandwidth)
 
     def handler_mem_request(
         self, mem_req_list: List["MemoryRequest"]
