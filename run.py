@@ -205,14 +205,12 @@ def main(argv=None):
         stats = generated_workload.stats
         print(f"Tokens:    {stats.selected_tokens}")
         print(f"Pages:     {stats.unique_pages}")
-        print(f"Requests:  {stats.logical_requests} "
-              f"(global: {metrics.global_memory_reqs_num})")
+        print(f"Requests:  {stats.logical_requests}")
         print(f"Demand:    {stats.demand_bytes} B")
         print(f"Issued:    {stats.issued_bytes} B")
     else:
         print(f"Requests:  {num_requests} × {request_size}B → "
-              f"{metrics.memory_reqs_num} memory reqs "
-              f"(global: {metrics.global_memory_reqs_num})")
+              f"{metrics.memory_reqs_num} memory reqs")
     if backend == MediaSystemBackend.RAMULATOR:
         print(f"Cycles:    {metrics.cycles}")
     print(f"Time:      {metrics.total_time * 1e9:.1f} ns")

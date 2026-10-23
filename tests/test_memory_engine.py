@@ -101,15 +101,6 @@ class TestMemoryEngineIssueRequest(unittest.TestCase):
         )
         self.assertEqual(metrics.memory_reqs_num, 3)  # Analytic: no decomposition
 
-    def test_global_memory_reqs_num_equals_local(self):
-        """global_memory_reqs_num is always equal to memory_reqs_num."""
-        metrics = self.engine.issue_request(
-            [0, 64], [64, 64],
-            [MemoryRequestType.KREAD, MemoryRequestType.KWRITE],
-        )
-        self.assertEqual(metrics.memory_reqs_num, 2)
-        self.assertEqual(metrics.global_memory_reqs_num, 2)
-
     def test_engine_metrics_accumulation(self):
         self.engine.issue_request([0], [64], [MemoryRequestType.KREAD])
         self.engine.issue_request([0], [128], [MemoryRequestType.KWRITE])
@@ -172,7 +163,6 @@ class TestMemoryEngineMetrics(unittest.TestCase):
         """MQSim device IOPS is time-weighted across simulation batches."""
         em = MemoryEngineMetrics()
         m1 = MemoryMetrics(cycles=0, total_time=0.1, memory_reqs_num=1,
-                           global_memory_reqs_num=100,
                            iops=1000.0, iops_read=800.0, iops_write=200.0,
                            bandwidth=500.0)
         em.update(m1, total_bytes=50)
@@ -181,7 +171,6 @@ class TestMemoryEngineMetrics(unittest.TestCase):
         self.assertEqual(em.iops_write, 200.0)
 
         m2 = MemoryMetrics(cycles=0, total_time=0.2, memory_reqs_num=1,
-                           global_memory_reqs_num=100,
                            iops=500.0, iops_read=100.0, iops_write=400.0,
                            bandwidth=250.0)
         em.update(m2, total_bytes=50)
@@ -192,8 +181,7 @@ class TestMemoryEngineMetrics(unittest.TestCase):
     def test_engine_metrics_without_device_iops_remains_none(self):
         """Analytic/Ramulator metrics do not synthesize logical IOPS."""
         em = MemoryEngineMetrics()
-        m = MemoryMetrics(cycles=0, total_time=0.5, memory_reqs_num=1,
-                          global_memory_reqs_num=100)
+        m = MemoryMetrics(cycles=0, total_time=0.5, memory_reqs_num=1)
         em.update(m, total_bytes=1000)
         self.assertIsNone(em.iops)
         self.assertIsNone(em.iops_read)

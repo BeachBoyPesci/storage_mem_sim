@@ -58,7 +58,6 @@ def test_kv_workload_runs_through_native_ramulator(
     metrics = generated.issue(engine)
 
     assert metrics.memory_reqs_num == generated.stats.logical_requests
-    assert metrics.global_memory_reqs_num == generated.stats.logical_requests
     assert metrics.cycles > 0
     assert metrics.total_time > 0
     assert engine.get_engine_metrics().total_bytes == generated.stats.issued_bytes

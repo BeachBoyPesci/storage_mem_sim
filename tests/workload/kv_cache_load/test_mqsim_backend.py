@@ -69,7 +69,6 @@ def test_kv_workload_runs_through_native_mqsim(
     metrics = generated.issue(engine)
 
     assert metrics.memory_reqs_num == generated.stats.logical_requests
-    assert metrics.global_memory_reqs_num == generated.stats.logical_requests
     assert metrics.total_time > 0
     assert metrics.bandwidth > 0
     assert metrics.iops > 0

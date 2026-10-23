@@ -71,7 +71,6 @@ class TestMemoryEngineSingleInstance(unittest.TestCase):
         self.assertEqual(metrics.cycles, 0)
         self.assertEqual(metrics.total_time, 0.0)
         self.assertEqual(metrics.memory_reqs_num, 0)
-        self.assertEqual(metrics.global_memory_reqs_num, 0)
         self.assertEqual(len(fake.calls), 0)
 
     def test_bandwidth_uses_simulated_bytes(self):

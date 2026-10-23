@@ -59,7 +59,6 @@ def test_kv_workload_runs_through_analytic(
     expected_time = generated.stats.issued_bytes / (2.0 * 1024**3)
     assert metrics.total_time == pytest.approx(expected_time)
     assert metrics.memory_reqs_num == generated.stats.logical_requests
-    assert metrics.global_memory_reqs_num == generated.stats.logical_requests
 
 
 def test_analytic_is_address_insensitive_for_equal_token_traffic():

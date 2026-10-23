@@ -57,12 +57,16 @@
 
 ```
 storage_mem_sim/
-├── memengine/                    # Memory Engine (root level)
+├── memory_engine.py              # Engine config + main engine class
+├── memory_request.py             # Engine-level request
+├── memory_type.py                # Enums (MemoryType, RequestType)
+├── memory_metrics.py             # Metrics containers
+├── memory_pool/                  # Multi-instance pool
 │   ├── __init__.py
-│   ├── memory_engine.py          # Engine config + main engine class
-│   ├── memory_request.py         # Engine-level request
-│   ├── memory_type.py            # Enums (MemoryType, RequestType)
-│   └── memory_metrics.py         # Metrics containers
+│   └── memory_pool.py            # MemoryPoolConfig + MemoryPool
+├── run.py                        # JSON-driven CLI
+├── workload/                     # High-level workloads
+│   └── kv_cache_load/            # KV cache load generator
 ├── media/                        # Media System layer
 │   ├── __init__.py
 │   ├── base_media.py             # Abstract base class
@@ -74,20 +78,14 @@ storage_mem_sim/
 │   ├── analytic_media_system.py  # Analytic backend
 │   ├── ramulator_media_system.py # Ramulator2 backend
 │   ├── mqsim_media_system.py     # MQSim backend
-│   ├── ramulator_wrapper/         # Ramulator2 integration
-│   │   ├── ramulator2/            #   Git submodule (v2.1 branch)
-│   │   ├── setup.py               #   pybind11 build script
-│   │   └── ramulator_binding.cpp  #   pybind11 binding code
-│   └── mqsim_wrapper/             # MQSim integration
-│       ├── MQSim/                 #   Git submodule
-│       ├── setup.py               #   pybind11 build script
-│       └── adapter_pybind.cpp     #   pybind11 binding code
+│   ├── ramulator_wrapper/        # Ramulator2 integration (submodule + pybind11)
+│   └── mqsim_wrapper/            # MQSim integration (submodule + pybind11 + pymqsim)
+├── configs/                      # Example configs (JSON / YAML / XML)
 ├── docs/                         # Documentation
-│   └── design.md
 └── tests/                        # Test cases
-    ├── __init__.py
     ├── test_memory_engine.py
-    ├── test_memory_object.py
+    ├── test_memory_request.py
+    ├── test_memory_pool.py
     ├── test_analytic_media.py
     ├── test_ramulator_media.py
     └── test_mqsim_media.py
@@ -99,7 +97,7 @@ storage_mem_sim/
 
 ### 4.1 Address Space Management
 
-`MemoryEngine` maintains a monotonically increasing `global_addr` for simulating global virtual/physical addresses. Each tensor allocation returns an aligned base address:
+`MemoryEngine` maintains a monotonically increasing local allocation water level `global_addr`; addresses are local to the instance. A global address space exists only at the `MemoryPool` level (global = instance `global_base` + local). Each tensor allocation returns an aligned base address:
 
 ```python
 def get_tensor_addr(self, size: int) -> int:
@@ -135,8 +133,8 @@ to the backend as-is, with no DP replication and no instance fan-out.
 Multi-instance semantics are expressed by `memory_pool.MemoryPool`:
 
 1. The pool owns a global address space partitioned into per-instance windows.
-2. Each request is routed by address to the owning instance's `MemoryEngine`
-   (global→local address translation).
+2. Each request is split at window boundaries; every fragment is routed to
+   the owning instance's `MemoryEngine` (global→local address translation).
 3. Instances execute in parallel; pool-level `time = max(per-instance time)`
    and `bandwidth = total_bytes / max_time`.
 
@@ -156,9 +154,7 @@ class MemoryEngineConfig:
 MemoryMetrics (single issue_request result)
   ├── cycles: int              ← from MediaMetrics
   ├── total_time: float        ← from MediaMetrics
-  ├── memory_scale_factor: int
-  ├── memory_reqs_num: int     ← logical requests in simulated instance
-  ├── global_memory_reqs_num: int
+  ├── memory_reqs_num: int     ← engine-level (fragment) request count
   ├── bandwidth: float         ← B/s reported by backend
   ├── iops / iops_read / iops_write
   │                              ← MQSim end-to-end device rates;
@@ -193,8 +189,8 @@ class MediaConfig:
     media_type: MediaSystemBackend   # RAMULATOR / MQSIM / ANALYTIC
     config_path: str                 # Backend config file path (YAML or XML)
     granularity: int = 64            # Access granularity (bytes)
-    capacity: float                  # Capacity in GB
-    bandwidth: float                 # Bandwidth in GB/s (Analytic backend)
+    capacity: float                  # Capacity in GiB (total across instances for MemoryPoolConfig)
+    bandwidth: float                 # Bandwidth in GiB/s (Analytic backend)
     scale_factor: float              # Cycles → time conversion factor
 ```
 
@@ -238,9 +234,9 @@ Pure analytical model: `total_time = Σ (size / bandwidth)`. No cycle-level simu
 ```python
 class AnalyticMediaSystem(BaseMediaSystem):
     def handler_mem_request(self, mem_req_list):
-        total_time = sum(
-            req.memory_object.size / (self.bandwidth * 1024**3)
-            for req in mem_req_list
+        total_time = (
+            sum(req.size for req in mem_req_list)
+            / self._bandwidth_bytes_per_sec  # bandwidth (GiB/s) * 1024**3
         )
         return MediaMetrics(time=total_time)
 ```
@@ -268,7 +264,7 @@ Integrates MQSim via C++ pybind11 extension (`mqsim_backend` module).
 4. Estimate time: `total_time = total_bytes / bandwidth_bps`
 5. Return `MediaMetrics(time)` (no cycles)
 
-**Build:** `cd media/mq_sim_wrapper && pip install -e .`
+**Build:** `cd media/mqsim_wrapper && pip install -e .`
 
 **Key Config:**
 | Key | Meaning |

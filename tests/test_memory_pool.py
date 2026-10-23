@@ -27,11 +27,8 @@ def _pool_config(instance_count=2, capacity=1.0, bandwidth=100.0):
     )
 
 
-def _pool(instance_count=2, capacity=1.0, bandwidth=100.0, **kwargs):
-    return MemoryPool(
-        _pool_config(instance_count, capacity, bandwidth),
-        **kwargs,
-    )
+def _pool(instance_count=2, capacity=1.0, bandwidth=100.0):
+    return MemoryPool(_pool_config(instance_count, capacity, bandwidth))
 
 
 class TestPoolAddressWindows:
@@ -39,6 +36,20 @@ class TestPoolAddressWindows:
         pool = _pool(instance_count=3, capacity=1.0)
         bases = [e.global_base for e in pool.instances]
         assert bases == [0, _GIB, 2 * _GIB]
+
+    def test_unaligned_per_instance_capacity_rejected(self):
+        """4 GiB / 3 instances 截断后不是 64 B 的整数倍，构建时 fail-loud。"""
+        config = MemoryPoolConfig(
+            instance_count=3,
+            memory_type=MemoryType.HBM,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=4.0,
+                bandwidth=100.0,
+            ),
+        )
+        with pytest.raises(ValueError, match="granularity"):
+            MemoryPool(config)
 
     def test_get_tensor_addr_returns_global(self):
         pool = _pool(instance_count=2, capacity=1.0)

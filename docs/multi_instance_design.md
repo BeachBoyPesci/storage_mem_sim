@@ -9,8 +9,8 @@
 
 1. 将一个 `MemoryEngine` 明确定义为一个独立的物理介质实例。
 2. 通过 `MemoryPool` 管理多个 `MemoryEngine`、全局地址和实例路由。
-3. `MemoryPool` 接收调用者的全部请求，按全局地址把每个请求下发到所属
-   实例，由实例的同步 `issue_request()` 批量执行并聚合结果。
+3. `MemoryPool` 接收调用者的全部请求，按地址窗口边界把每个请求切分后
+   下发到各实例，由实例的同步 `issue_request()` 批量执行并聚合结果。
 4. 单实例场景直接使用 `MemoryEngine.issue_request()`。
 
 不考虑：
@@ -48,7 +48,7 @@ DP 语义应由上层 workload 或父项目服务拓扑表达；多实例数量�
 
 - 直接调用 `MemoryEngine` 时，地址是该实例的 local byte address。
 - 通过 `MemoryPool` 调用时，地址始终是 pool global byte address。
-- 根据 global address 所在的实例地址窗口进行确定性路由。
+- 根据 global address 所在的实例地址窗口按边界切分后确定性路由。
 - 实例选择发生在数据分配时，而不是每次访问时，避免同一个地址被动态
   发送到不同实例。
 
@@ -63,7 +63,7 @@ flowchart TB
     subgraph POOL_LAYER["MemoryPool：多实例系统层"]
         API["issue_request / get_tensor_addr"]
         ADDR["Global Address Windows<br/>Allocation Policy"]
-        ROUTER["Global -> Engine ID + Local Address"]
+        ROUTER["Global -> Fragments<br/>(Engine ID + Local Addr)"]
         API --> ADDR
         ADDR --> ROUTER
     end
@@ -141,7 +141,8 @@ def get_tensor_addr(self, size_bytes: int) -> int:
 2. 区间按窗口边界切成片段，逐片段调用对应
    `MemoryEngine.get_tensor_addr()` 分配 local address。打包不变量
    保证 engine 返回的本地地址与窗口偏移一致；不一致说明有调用方绕开
-   pool 直接分配，fail-loud 抛 `RuntimeError`。
+   pool 直接向 engine 1+ 分配，fail-loud 抛 `RuntimeError`（engine 0
+   的 `global_base` 为 0，绕开 pool 的直接分配会被静默吸收）。
 3. 返回全局起始地址。
 
 因此一个 allocation 可以跨越多个实例窗口——前面的实例填满后才轮到
@@ -227,7 +228,7 @@ def issue_request(
     size: List[int],
     req_type: List[MemoryRequestType],
 ) -> MemoryMetrics:
-    """逐请求路由到所属实例，各实例并行执行后聚合。"""
+    """每个请求按窗口边界切成一个或多个片段，各实例并行执行后聚合。"""
 ```
 
 路由与聚合规则：
@@ -248,6 +249,9 @@ def issue_request(
 
 其他辅助接口：
 
+- `instances`（只读属性）：池中全部 `MemoryEngine` 实例组成的元组。
+- `get_engine(engine_id) -> MemoryEngine`：按实例 id 取单个 engine，
+  越界抛 `IndexError`。
 - `align_up(size_bytes) -> int`：按对齐粒度向上取整。各实例同构、
   粒度一致，委托给第一个 engine 的同名方法。
 - `global_addr`（只读属性）：分配水位，即下一次分配的起始全局地址，
@@ -284,7 +288,10 @@ def issue_request(
 
 - `capacity`：按**总容量**解释。`MemoryPoolConfig.__post_init__` 将其
   除以实例数，均分后的每实例容量写回 `media_config` 再传给各 engine
-  （`instances == 1` 时除以 1，等价于单实例容量）。
+  （`instances == 1` 时除以 1，等价于单实例容量）。均分结果必须是
+  engine 地址粒度（通常 64 B）的整数倍——GiB 浮点均分再截断可能
+  产生非对齐窗口（如 4 GiB ÷ 3），`MemoryPool` 构建时对此抛
+  `ValueError`。
 - `bandwidth`：**每实例全量带宽**，实例间不分摊——N 实例模型的聚合峰值
   约为 N × bandwidth。这是"实例相互独立"语义的一部分，不是共享介质被
   均分。

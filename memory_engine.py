@@ -26,12 +26,12 @@ class MemoryEngineConfig:
                      记录（日志、报告），不影响仿真行为。
         media_config: 介质后端配置。MemoryEngine 内部通过
                       MediaSystemFactory.create(media_config) 使用它。
-                      必须设置 media_config.capacity（GB）。
+                      必须设置 media_config.capacity（GiB）。
         granularity: 地址对齐粒度，单位为字节。对 Ramulator 从 DRAM spec
                      自动派生；其他后端以此作为回退值。
 
     自动计算（从 media_config.capacity 派生，单实例口径）：
-        capacity: 实例容量，单位为字节（= capacity_GB * 1024**3）。
+        capacity: 实例容量，单位为字节（= capacity_GiB * 1024**3）。
     """
     # TODO: memory_type 是调用方自声明的标签，与后端实际仿真的器件没有
     # 一致性校验——ramulator 的器件由 YAML preset 决定、mqsim 固定为 SSD，
@@ -79,7 +79,7 @@ class MemoryEngine:
         self.mem_config.granularity = tx if tx else 64
 
         logger.info(
-            "MemoryEngine init: mem_type=%s granularity=%d capacity=%dGB",
+            "MemoryEngine init: mem_type=%s granularity=%d capacity=%dGiB",
             mem_config.memory_type.value, self.mem_config.granularity,
             mem_config.capacity // (1024 ** 3))
 
@@ -90,10 +90,6 @@ class MemoryEngine:
     @property
     def capacity_bytes(self) -> int:
         return self.mem_config.capacity
-
-    @property
-    def remaining_capacity_bytes(self) -> int:
-        return max(0, self.capacity_bytes - self.global_addr)
 
     # ------------------------------------------------------------------
     # 地址分配
@@ -168,7 +164,6 @@ class MemoryEngine:
             cycles=total_media_metrics.cycles,
             total_time=total_media_metrics.time,
             memory_reqs_num=n,
-            global_memory_reqs_num=n,
             bandwidth=total_media_metrics.bandwidth,
             iops=total_media_metrics.iops,
             iops_read=total_media_metrics.iops_read,

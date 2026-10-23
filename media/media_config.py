@@ -15,8 +15,8 @@ class MediaConfig:
         media_type: 使用哪个后端（ANALYTIC、RAMULATOR、MQSIM）。
         config_path: 后端专属配置文件的路径
                      （Ramulator 使用 YAML，MQSim 使用 XML，Analytic 不使用）。
-        capacity: 设备容量，单位 GB。
-        bandwidth: 峰值带宽，单位 GB/s（Analytic 后端使用）。
+        capacity: 设备容量，单位 GiB（实现按 1024**3 换算）。
+        bandwidth: 峰值带宽，单位 GiB/s（Analytic 后端使用）。
         io_frequency: I/O 时钟频率，单位 MHz（Ramulator 用于将
                       cycles 转换为时间：scale_factor = 1.0 / (io_frequency * 10^6)）。
         granularity: 访问粒度，单位字节。Ramulator 会从 DRAM spec 自动推导；

@@ -48,7 +48,7 @@ class MemoryPoolConfig:
             )
             if self.instance_count > 1:
                 logger.info(
-                    "MemoryPoolConfig: capacity=%.1f GB is TOTAL capacity; "
+                    "MemoryPoolConfig: capacity=%.1f GiB is TOTAL capacity; "
                     "per-instance = %.1f / %d = %.1f GiB",
                     total_gib, total_gib, self.instance_count, per_gib,
                 )
@@ -94,6 +94,20 @@ class MemoryPool:
             cfg = dataclasses.replace(engine_config) if idx > 0 else engine_config
             from ..memory_engine import MemoryEngine
             engine = MemoryEngine(cfg)
+            if idx == 0:
+                # 顺序全局打包的不变量要求窗口边界按粒度对齐（engine 本地
+                # 水位 == 全局水位 - global_base）；容量 GiB 浮点均分再
+                # int() 截断可能产生非对齐窗口，此时直接拒绝。各实例
+                # 同构，校验第一个即可。
+                gran = engine.mem_config.granularity
+                if engine.capacity_bytes % gran != 0:
+                    raise ValueError(
+                        f"Per-instance capacity {engine.capacity_bytes} bytes "
+                        f"is not a multiple of address granularity {gran} "
+                        f"bytes (total capacity / instance_count="
+                        f"{config.instance_count}); choose a total capacity "
+                        f"that divides into {gran}-byte-aligned windows"
+                    )
             engine.instance_id = idx
             engine.global_base = base
             self._engines.append(engine)
@@ -264,7 +278,6 @@ class MemoryPool:
             cycles=total_cycles,
             total_time=total_time,
             memory_reqs_num=total_reqs,
-            global_memory_reqs_num=total_reqs,
             bandwidth=(total_bytes / total_time if total_time > 0 else 0.0),
             iops=sum(iops_values) if iops_values else None,
             iops_read=sum(iops_read_values) if iops_read_values else None,

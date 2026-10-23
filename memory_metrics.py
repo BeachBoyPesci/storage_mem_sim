@@ -15,19 +15,14 @@ class MemoryMetrics:
     Attributes:
         cycles: 消耗的总周期数（来自介质 backend）。
         total_time: 总时间，单位为秒（来自介质 backend）。
-        memory_scale_factor: 时间换算使用的缩放因子。
         memory_reqs_num: 被模拟存储实例中的 engine 级请求数。
-        global_memory_reqs_num: 已弃用的兼容别名，
-                                与 memory_reqs_num 始终相等。
         iops: MQSim 报告的端到端设备 IOPS；当所选 backend
               不提供该指标时为 None。
         bandwidth: 带宽，单位为字节/秒（来自介质 backend）。
     """
     cycles: int = 0
     total_time: float = 0.0
-    memory_scale_factor: int = 1
     memory_reqs_num: int = 0
-    global_memory_reqs_num: int = 0
     bandwidth: float = 0.0
     iops: Optional[float] = None
     iops_read: Optional[float] = None
@@ -42,8 +37,6 @@ class MemoryEngineMetrics:
         total_time: 累计总时间，单位为秒。
         total_bytes: 被模拟存储实例累计传输的字节数。
         memory_reqs_num: 被模拟存储实例中累计的 engine 级请求数。
-        global_memory_reqs_num: 已弃用的兼容别名，
-                                与 memory_reqs_num 始终相等。
         mem_metrics_list: 每次请求的 MemoryMetrics 历史记录。
         bandwidth: 累计带宽 = total_bytes / total_time (B/s)。
         iops: 按时间加权的端到端 MQSim 设备 IOPS；对不报告设备
@@ -53,7 +46,6 @@ class MemoryEngineMetrics:
     total_time: float = 0.0
     total_bytes: int = 0
     memory_reqs_num: int = 0
-    global_memory_reqs_num: int = 0
     bandwidth: float = 0.0
     iops: Optional[float] = None
     iops_read: Optional[float] = None
@@ -68,7 +60,6 @@ class MemoryEngineMetrics:
         self.total_time += metrics.total_time
         self.total_bytes += total_bytes
         self.memory_reqs_num += metrics.memory_reqs_num
-        self.global_memory_reqs_num += metrics.global_memory_reqs_num
         self.mem_metrics_list.append(metrics)
 
         if self.total_time <= 0:

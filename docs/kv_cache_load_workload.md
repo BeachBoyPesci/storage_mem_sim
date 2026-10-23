@@ -93,9 +93,10 @@ python -m storage_mem_sim.run \
 ```
 
 这个配置随机选择 32 个 page，每个 page 用 4 个 token 表达需求，最终生成
-32 条、每条 9216 B 的整页请求。CLI 通过 `MemoryEngine.get_tensor_addr()`
-为完整 KV region 分配 `base_addr`，因此 CLI workload JSON 中应省略
-`base_addr` 或将其设为 0。
+32 条、每条 9216 B 的整页请求。CLI 通过 `get_tensor_addr()` 为完整
+KV region 分配 `base_addr`（多实例走 `MemoryPool`，单实例走
+`MemoryEngine`），因此 CLI workload JSON 中应省略 `base_addr` 或将其
+设为 0。
 
 仓库提供了完整的访问模式和请求粒度组合：
 
@@ -159,7 +160,6 @@ token_size_bytes    = 576
 request_type        = KREAD
 page_alignment_bytes = 1
 seed                = 42（主结果；token 敏感性检查另行覆盖）
-DP                  = 1
 storage instances   = 1
 Ramulator tx_bytes  = 32
 ```
@@ -390,7 +390,6 @@ token_size_bytes     = 576
 request_type         = KREAD
 page_alignment_bytes = 1
 seed                 = 42（主结果；token 敏感性检查另行覆盖）
-DP                   = 1
 storage instances    = 1
 Ramulator tx_bytes   = 64
 RefreshManager       = AllBank
