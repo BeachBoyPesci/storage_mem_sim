@@ -1,6 +1,8 @@
 """Tests for MemoryPool: global address windows, allocation, sync routing,
 and pool-level metrics aggregation."""
 
+import logging
+
 import pytest
 
 from ..memory_type import MemoryType, MemoryRequestType
@@ -37,14 +39,36 @@ class TestPoolAddressWindows:
         bases = [e.global_base for e in pool.instances]
         assert bases == [0, _GIB, 2 * _GIB]
 
-    def test_unaligned_per_instance_capacity_rejected(self):
-        """4 GiB / 3 instances 截断后不是 64 B 的整数倍，构建时 fail-loud。"""
+    def test_unaligned_per_instance_capacity_rounded_down(self, caplog):
+        """4 GiB / 3 截断后不是 64 B 的倍数：向下取整到粒度倍数并打 warning。"""
         config = MemoryPoolConfig(
             instance_count=3,
             memory_type=MemoryType.HBM,
             media_config=MediaConfig(
                 media_type=MediaSystemBackend.ANALYTIC,
                 capacity=4.0,
+                bandwidth=100.0,
+            ),
+        )
+        with caplog.at_level(logging.WARNING):
+            pool = MemoryPool(config)
+
+        raw = int(4.0 / 3 * _GIB)  # 1,431,655,765，非 64 对齐
+        expected = raw - raw % 64
+        assert [e.capacity_bytes for e in pool.instances] == [expected] * 3
+        assert any("rounding down" in r.message for r in caplog.records)
+        # 取整后的全部容量都可分配（原崩溃场景：末尾 64 B 触发 OverflowError）
+        pool.get_tensor_addr(expected * 3)
+        assert pool.global_addr == expected * 3
+
+    def test_per_instance_capacity_below_granularity_rejected(self):
+        """每实例容量小于地址粒度时无法形成可用窗口，构建时 fail-loud。"""
+        config = MemoryPoolConfig(
+            instance_count=2,
+            memory_type=MemoryType.HBM,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=96 / _GIB,  # 每实例 48 B < 64 B 粒度
                 bandwidth=100.0,
             ),
         )

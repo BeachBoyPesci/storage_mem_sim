@@ -27,8 +27,9 @@ class MemoryPoolConfig:
                       解释；``__post_init__`` 会将其均分为每实例容量
                       （capacity ÷ instance_count）后写回。``bandwidth``
                       始终是每实例全量带宽，不均分。均分后的每实例容量
-                      必须是 engine 地址粒度的整数倍，否则 ``MemoryPool``
-                      构建时抛 ``ValueError``。
+                      若不是 engine 地址粒度的整数倍，``MemoryPool``
+                      构建时会向下取整到粒度倍数（打 warning 记录损失
+                      字节数）；容量小于粒度时抛 ``ValueError``。
     """
 
     instance_count: int = 1
@@ -99,17 +100,25 @@ class MemoryPool:
             if idx == 0:
                 # 顺序全局打包的不变量要求窗口边界按粒度对齐（engine 本地
                 # 水位 == 全局水位 - global_base）；容量 GiB 浮点均分再
-                # int() 截断可能产生非对齐窗口，此时直接拒绝。各实例
-                # 同构，校验第一个即可。
+                # int() 截断可能产生非对齐窗口，此时向下取整到粒度倍数
+                # 并打 warning。各实例同构，只需计算一次。
                 gran = engine.mem_config.granularity
-                if engine.capacity_bytes % gran != 0:
+                per_cap = engine.capacity_bytes
+                aligned_cap = per_cap - per_cap % gran
+                if aligned_cap == 0:
                     raise ValueError(
-                        f"Per-instance capacity {engine.capacity_bytes} bytes "
-                        f"is not a multiple of address granularity {gran} "
-                        f"bytes (instance_count={config.instance_count}); "
-                        f"choose a total capacity that divides into "
-                        f"{gran}-byte-aligned windows"
+                        f"Per-instance capacity {per_cap} bytes is smaller "
+                        f"than address granularity {gran} bytes "
+                        f"(instance_count={config.instance_count})"
                     )
+                if aligned_cap != per_cap:
+                    logger.warning(
+                        "Per-instance capacity %d B is not a multiple of "
+                        "granularity %d B; rounding down to %d B "
+                        "(%d B lost per instance)",
+                        per_cap, gran, aligned_cap, per_cap - aligned_cap,
+                    )
+            engine.mem_config.capacity = aligned_cap
             engine.instance_id = idx
             engine.global_base = base
             self._engines.append(engine)

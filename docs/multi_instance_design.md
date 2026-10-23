@@ -292,10 +292,10 @@ def issue_request(
 
 - `capacity`：按**总容量**解释。`MemoryPoolConfig.__post_init__` 将其
   除以实例数，均分后的每实例容量写回 `media_config` 再传给各 engine
-  （`instances == 1` 时除以 1，等价于单实例容量）。均分结果必须是
-  engine 地址粒度（通常 64 B）的整数倍——GiB 浮点均分再截断可能
-  产生非对齐窗口（如 4 GiB ÷ 3），`MemoryPool` 构建时对此抛
-  `ValueError`。
+  （`instances == 1` 时除以 1，等价于单实例容量）。GiB 浮点均分再
+  截断可能产生非粒度对齐的每实例容量（如 4 GiB ÷ 3）；`MemoryPool`
+  构建时将其向下取整到粒度倍数并打 warning 记录损失字节，容量
+  小于粒度时抛 `ValueError`。
 - `bandwidth`：**每实例全量带宽**，实例间不分摊——N 实例模型的聚合峰值
   约为 N × bandwidth。这是"实例相互独立"语义的一部分，不是共享介质被
   均分。
