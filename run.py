@@ -167,7 +167,12 @@ def main(argv=None):
             if not ms.mqsim_available:
                 print(f"  Build: cd media/mqsim_wrapper && pip install -e .")
     else:
-        print(f"Bandwidth:  {mc.get('bandwidth', 100.0)} GiB/s")
+        bw = mc.get('bandwidth', 100.0)
+        if use_pool:
+            print(f"Bandwidth:  {bw} GiB/s per instance  |  "
+                  f"pool peak {bw * instances} GiB/s")
+        else:
+            print(f"Bandwidth:  {bw} GiB/s")
 
     capacity_gib = mc.get('capacity', 32.0)
     if use_pool:
