@@ -159,7 +159,10 @@ MemoryMetrics (single issue_request result)
   ├── bandwidth: float         ← B/s reported by backend
   ├── iops / iops_read / iops_write
   │                              ← MQSim end-to-end device rates;
-  │                                None for Analytic/Ramulator
+  │                                None for Analytic/Ramulator;
+  │                                pool: mean across instances
+  ├── iops_max / iops_read_max / iops_write_max
+  │                              ← pool only: max across instances
 
 MemoryEngineMetrics (cumulative)
   ├── cycles / total_time / memory_reqs_num (accumulated)

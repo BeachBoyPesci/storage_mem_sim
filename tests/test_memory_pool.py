@@ -8,6 +8,7 @@ import pytest
 from ..memory_type import MemoryType, MemoryRequestType
 from ..media import (
     MediaConfig,
+    MediaMetrics,
     MediaSystemBackend,
 )
 from ..memory_pool import MemoryPool, MemoryPoolConfig
@@ -39,8 +40,8 @@ class TestPoolAddressWindows:
         bases = [e.global_base for e in pool.instances]
         assert bases == [0, _GIB, 2 * _GIB]
 
-    def test_unaligned_per_instance_capacity_rounded_down(self, caplog):
-        """4 GiB / 3 截断后不是 64 B 的倍数：向下取整到粒度倍数并打 warning。"""
+    def test_remainder_goes_to_last_instance(self, caplog):
+        """4 GiB / 3：整 GiB 整除，前两个各 1 GiB，第三个拿余数 2 GiB。"""
         config = MemoryPoolConfig(
             instance_count=3,
             memory_type=MemoryType.HBM,
@@ -50,29 +51,29 @@ class TestPoolAddressWindows:
                 bandwidth=100.0,
             ),
         )
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             pool = MemoryPool(config)
 
-        raw = int(4.0 / 3 * _GIB)  # 1,431,655,765，非 64 对齐
-        expected = raw - raw % 64
-        assert [e.capacity_bytes for e in pool.instances] == [expected] * 3
-        assert any("rounding down" in r.message for r in caplog.records)
-        # 取整后的全部容量都可分配（原崩溃场景：末尾 64 B 触发 OverflowError）
-        pool.get_tensor_addr(expected * 3)
-        assert pool.global_addr == expected * 3
+        caps = [e.capacity_bytes for e in pool.instances]
+        assert caps == [_GIB, _GIB, 2 * _GIB]
+        assert pool.total_capacity_bytes == 4 * _GIB
+        assert any("remainder" in r.message for r in caplog.records)
+        # 全部容量（含最后一个窗口的余数）都可分配
+        pool.get_tensor_addr(4 * _GIB)
+        assert pool.global_addr == 4 * _GIB
 
-    def test_per_instance_capacity_below_granularity_rejected(self):
-        """每实例容量小于地址粒度时无法形成可用窗口，构建时 fail-loud。"""
+    def test_sub_gib_per_instance_share_rejected(self):
+        """整 GiB 整除：第一个实例分配到 0 GiB（份额不足 1 GiB）时报错。"""
         config = MemoryPoolConfig(
             instance_count=2,
             memory_type=MemoryType.HBM,
             media_config=MediaConfig(
                 media_type=MediaSystemBackend.ANALYTIC,
-                capacity=96 / _GIB,  # 每实例 48 B < 64 B 粒度
+                capacity=1.5,
                 bandwidth=100.0,
             ),
         )
-        with pytest.raises(ValueError, match="granularity"):
+        with pytest.raises(ValueError, match="第一个 engine"):
             MemoryPool(config)
 
     def test_reset_addr_clears_all_engines(self):
@@ -246,6 +247,63 @@ class TestPoolIssueRequest:
             [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
         )
         assert metrics.iops is None
+        assert metrics.iops_max is None
+        assert metrics.iops_read is None
+        assert metrics.iops_read_max is None
+        assert metrics.iops_write is None
+        assert metrics.iops_write_max is None
+
+    def test_pool_iops_mean_and_max(self):
+        """IOPS 是单实例设备属性：池级报告各实例的平均值和最大值。"""
+        class _FakeMedia:
+            def __init__(self, iops):
+                self._iops = iops
+
+            def handler_mem_request(self, mem_reqs):
+                return MediaMetrics(
+                    time=1e-6,
+                    bandwidth=1.0,
+                    iops=self._iops,
+                    iops_read=self._iops,
+                    iops_write=self._iops,
+                )
+
+        pool = _pool(instance_count=2, capacity=1.0)
+        pool.get_engine(0).media_system = _FakeMedia(1000.0)
+        pool.get_engine(1).media_system = _FakeMedia(500.0)
+        metrics = pool.issue_request(
+            [0, _GIB], [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        assert metrics.iops == 750.0
+        assert metrics.iops_max == 1000.0
+        assert metrics.iops_read == 750.0
+        assert metrics.iops_read_max == 1000.0
+        assert metrics.iops_write == 750.0
+        assert metrics.iops_write_max == 1000.0
+
+    def test_pool_iops_ignores_none_instances(self):
+        """部分实例不报告 IOPS 时，只对非 None 的实例取平均和最大。"""
+        class _FakeMedia:
+            def __init__(self, iops):
+                self._iops = iops
+
+            def handler_mem_request(self, mem_reqs):
+                return MediaMetrics(
+                    time=1e-6, bandwidth=1.0, iops=self._iops,
+                )
+
+        pool = _pool(instance_count=2, capacity=1.0)
+        pool.get_engine(0).media_system = _FakeMedia(1000.0)
+        pool.get_engine(1).media_system = _FakeMedia(None)
+        metrics = pool.issue_request(
+            [0, _GIB], [64, 64],
+            [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
+        )
+        assert metrics.iops == 1000.0
+        assert metrics.iops_max == 1000.0
+        assert metrics.iops_read is None
+        assert metrics.iops_read_max is None
 
 
 class TestPoolFactory:
@@ -262,8 +320,8 @@ class TestPoolFactory:
         with pytest.raises(ValueError, match="instance_count must be >= 1"):
             MemoryPoolConfig(instance_count=0)
 
-    def test_config_divides_total_capacity(self):
-        """media_config.capacity is TOTAL; each engine gets an equal share."""
+    def test_config_keeps_total_capacity(self):
+        """media_config.capacity 保持总容量口径；整 GiB 划分发生在 pool 构建时。"""
         config = MemoryPoolConfig(
             instance_count=4,
             media_config=MediaConfig(
@@ -272,7 +330,7 @@ class TestPoolFactory:
                 bandwidth=100.0,
             ),
         )
-        assert config.media_config.capacity == 2.0
+        assert config.media_config.capacity == 8.0
         pool = MemoryPool(config)
         for e in pool.instances:
             assert e.capacity_bytes == 2 * _GIB

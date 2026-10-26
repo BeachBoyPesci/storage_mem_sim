@@ -23,15 +23,16 @@ class MemoryPoolConfig:
     Attributes:
         instance_count: 实例数量（>= 1）。
         memory_type: 介质类型元数据（透传给各 engine，不影响仿真行为）。
-        media_config: 介质后端配置。其 ``capacity`` 与 ``bandwidth`` 均按
-                      **总量**口径解释；``__post_init__`` 会将其均分为
-                      每实例值（capacity ÷ instance_count、bandwidth ÷
-                      instance_count）后写回。``bandwidth`` 均分目前只
-                      影响 Analytic 后端（Ramulator/MQSim 的带宽由器件
-                      组织/仿真决定，不消费该字段）。均分后的每实例容量
-                      若不是 engine 地址粒度的整数倍，``MemoryPool``
-                      构建时会向下取整到粒度倍数（打 warning 记录损失
-                      字节数）；容量小于粒度时抛 ``ValueError``。
+        media_config: 介质后端配置。``capacity`` 按**总容量**（GiB）
+                      解释：``MemoryPool`` 构建时按整 GiB 整除，前
+                      n-1 个实例各 ⌊total ÷ n⌋ GiB，余数全部归最后
+                      一个实例；第一个实例分配到 0 GiB（即份额不足
+                      1 GiB）时抛 ``ValueError``。``bandwidth`` 也按
+                      **总量**口径解释：``__post_init__`` 将其均分为
+                      每实例值（bandwidth ÷ instance_count）后写回，
+                      聚合峰值 = 配置带宽；均分只影响 Analytic 后端
+                      （Ramulator/MQSim 的带宽由器件组织/仿真决定，
+                      不消费该字段）。
     """
 
     instance_count: int = 1
@@ -44,23 +45,20 @@ class MemoryPoolConfig:
                 f"instance_count must be >= 1, got {self.instance_count}"
             )
         if self.media_config is not None:
-            # 总容量/总带宽口径 → 每实例值：各 engine 拿到的
-            # media_config 已经是除完的值。聚合峰值 = 配置带宽
-            # （N 实例各得 bandwidth/N，并行执行）。
-            total_gib = self.media_config.capacity
-            per_gib = total_gib / self.instance_count
+            # 总带宽口径 → 每实例值：聚合峰值 = 配置带宽（N 实例各得
+            # bandwidth/N，并行执行）。capacity 保持总容量口径，窗口
+            # 划分（整 GiB 整除、余数归最后实例）在 MemoryPool 构建时
+            # 进行。
             total_bw = self.media_config.bandwidth
             per_bw = total_bw / self.instance_count
             self.media_config = dataclasses.replace(
-                self.media_config, capacity=per_gib, bandwidth=per_bw
+                self.media_config, bandwidth=per_bw
             )
             if self.instance_count > 1:
                 logger.info(
-                    "MemoryPoolConfig: capacity=%.1f GiB and bandwidth=%.1f "
-                    "GiB/s are TOTAL values; per-instance = %.1f/%d = %.1f "
-                    "GiB, %.1f/%d = %.1f GiB/s",
-                    total_gib, total_bw, total_gib, self.instance_count,
-                    per_gib, total_bw, self.instance_count, per_bw,
+                    "MemoryPoolConfig: bandwidth=%.1f GiB/s is TOTAL; "
+                    "per-instance = %.1f / %d = %.1f GiB/s",
+                    total_bw, total_bw, self.instance_count, per_bw,
                 )
 
 
@@ -82,10 +80,12 @@ class MemoryPool:
     """
 
     def __init__(self, config: MemoryPoolConfig):
-        """按 *config* 构建由同构 engine 组成的池。
+        """按 *config* 构建 engine 池。
 
         每个实例的 ``MemoryEngineConfig`` 由 pool 内部从
-        ``config.memory_type`` / ``config.media_config`` 派生。
+        ``config.memory_type`` / ``config.media_config`` 派生。窗口
+        容量按整 GiB 划分：前 n-1 个实例各 ⌊总容量 ÷ n⌋ GiB，余数
+        全部归最后一个实例；除容量余数外各实例同构。
 
         TODO(phase-2): 支持可插拔的分配策略（LEAST_ALLOCATED、加权、
         段表条带化等）。当前固定为顺序全局打包。
@@ -97,35 +97,37 @@ class MemoryPool:
             media_config=config.media_config,
         )
 
+        n = config.instance_count
+        total_gib = (
+            config.media_config.capacity if config.media_config else 0.0
+        )
+        base_gib = int(total_gib / n)
+        last_gib = total_gib - base_gib * (n - 1)
+        first_gib = base_gib if n > 1 else last_gib
+        if first_gib == 0:
+            raise ValueError(
+                f"第一个 engine 分配到了 0 GiB：总容量 {total_gib} GiB "
+                f"按整 GiB 整除给 {n} 个实例时，每个实例至少需分到 "
+                f"1 GiB；请增大 capacity 或减少 instances"
+            )
+        if n > 1 and last_gib != base_gib:
+            logger.info(
+                "MemoryPool: %.4f GiB over %d instances: base windows "
+                "%d GiB, last window takes the remainder (%.4f GiB)",
+                total_gib, n, base_gib, last_gib,
+            )
+
         # 构建各 engine，窗口基址直接记录在 engine.global_base 上。
+        # 整 GiB 窗口边界必然按地址粒度对齐，打包不变量不受影响。
         self._engines: List["MemoryEngine"] = []
         base = 0
-        for idx in range(config.instance_count):
-            cfg = dataclasses.replace(engine_config) if idx > 0 else engine_config
+        for idx in range(n):
+            cfg = dataclasses.replace(engine_config)
+            cfg.capacity = int(
+                (last_gib if idx == n - 1 else base_gib) * 1024 ** 3
+            )
             from ..memory_engine import MemoryEngine
             engine = MemoryEngine(cfg)
-            if idx == 0:
-                # 顺序全局打包的不变量要求窗口边界按粒度对齐（engine 本地
-                # 水位 == 全局水位 - global_base）；容量 GiB 浮点均分再
-                # int() 截断可能产生非对齐窗口，此时向下取整到粒度倍数
-                # 并打 warning。各实例同构，只需计算一次。
-                gran = engine.mem_config.granularity
-                per_cap = engine.capacity_bytes
-                aligned_cap = per_cap - per_cap % gran
-                if aligned_cap == 0:
-                    raise ValueError(
-                        f"Per-instance capacity {per_cap} bytes is smaller "
-                        f"than address granularity {gran} bytes "
-                        f"(instance_count={config.instance_count})"
-                    )
-                if aligned_cap != per_cap:
-                    logger.warning(
-                        "Per-instance capacity %d B is not a multiple of "
-                        "granularity %d B; rounding down to %d B "
-                        "(%d B lost per instance)",
-                        per_cap, gran, aligned_cap, per_cap - aligned_cap,
-                    )
-            engine.mem_config.capacity = aligned_cap
             engine.instance_id = idx
             engine.global_base = base
             self._engines.append(engine)
@@ -262,8 +264,9 @@ class MemoryPool:
         假定各实例并行执行，因此池级结果按如下方式
         聚合：``total_time``/``cycles`` 取各实例最大值，
         ``memory_reqs_num`` 求和，``bandwidth`` = 总字节数 / 最大时间
-        （精确重算），``iops`` 为各实例非 None 值之和（所有实例都为
-        None 时为 None）。
+        （精确重算）；IOPS 是单实例设备属性，不求和——``iops`` 为各
+        实例非 None 值的平均值，``iops_max`` 为最大值（全 None 时
+        两者均为 None，read/write 通道同理）。
         """
         n = len(addr)
         if len(size) != n or len(req_type) != n:
@@ -303,12 +306,24 @@ class MemoryPool:
             if m.iops_write is not None:
                 iops_write_values.append(m.iops_write)
 
+        def _mean_max(values: List[float]):
+            if not values:
+                return None, None
+            return sum(values) / len(values), max(values)
+
+        iops_mean, iops_max = _mean_max(iops_values)
+        iops_read_mean, iops_read_max = _mean_max(iops_read_values)
+        iops_write_mean, iops_write_max = _mean_max(iops_write_values)
+
         return MemoryMetrics(
             cycles=total_cycles,
             total_time=total_time,
             memory_reqs_num=total_reqs,
             bandwidth=(total_bytes / total_time if total_time > 0 else 0.0),
-            iops=sum(iops_values) if iops_values else None,
-            iops_read=sum(iops_read_values) if iops_read_values else None,
-            iops_write=sum(iops_write_values) if iops_write_values else None,
+            iops=iops_mean,
+            iops_read=iops_read_mean,
+            iops_write=iops_write_mean,
+            iops_max=iops_max,
+            iops_read_max=iops_read_max,
+            iops_write_max=iops_write_max,
         )

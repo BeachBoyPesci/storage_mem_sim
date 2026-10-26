@@ -218,12 +218,13 @@ class MemoryPoolConfig:
     instance_count: int = 1          # 实例数量（>= 1）
     memory_type: MemoryType = MemoryType.HBM
     media_config: Optional[object] = None
-                                     # capacity / bandwidth 按总量解释，
-                                     # __post_init__ 均分为每实例值
+    media_config: Optional[object] = None
+                                     # capacity / bandwidth 均按总量
+                                     # （GiB / GiB/s）解释
 ```
 
-`MemoryPool(config)` 内部为每个实例派生 `MemoryEngineConfig` 并构建
-同构 engine。
+`MemoryPool(config)` 内部为每个实例派生 `MemoryEngineConfig`；窗口容量
+按整 GiB 整除，余数归最后一个实例（除容量余数外各实例同构）。
 
 ```python
 def issue_request(
@@ -245,7 +246,9 @@ def issue_request(
    - `total_time` / `cycles` = 各实例最大值；
    - `memory_reqs_num` = 各实例求和（跨界请求的每个片段各计一次）；
    - `bandwidth = Σbytes / max_time`（精确重算）；
-   - `iops` = 各实例非 None 值求和（全 None 则为 None）。
+   - `iops`/`iops_read`/`iops_write` = 各实例非 None 值的平均值，
+     对应 `iops_max` 等 = 最大值（全 None 则为 None）。IOPS 是单
+     实例设备属性，池级不求和。
 
 `get_tensor_addr` 返回全局起始地址；数据先通过它分配，
 后续读写使用该全局地址。所属实例由地址窗口算术确定
@@ -294,15 +297,15 @@ def issue_request(
 
 关键语义：
 
-- `capacity`：按**总容量**解释。`MemoryPoolConfig.__post_init__` 将其
-  除以实例数，均分后的每实例容量写回 `media_config` 再传给各 engine
-  （`instances == 1` 时除以 1，等价于单实例容量）。GiB 浮点均分再
-  截断可能产生非粒度对齐的每实例容量（如 4 GiB ÷ 3）；`MemoryPool`
-  构建时将其向下取整到粒度倍数并打 warning 记录损失字节，容量
-  小于粒度时抛 `ValueError`。
-- `bandwidth`：按**总带宽**解释，与容量同样 ÷instances 均分给各
-  实例。N 实例模型的聚合峰值约为配置带宽（各实例实得
-  bandwidth/N，并行执行）。均分目前只影响 Analytic 后端；
+- `capacity`：按**总容量**（GiB）解释。`MemoryPool` 构建时按整 GiB
+  整除：前 n-1 个实例窗口各 ⌊total ÷ n⌋ GiB，余数（含不足 1 GiB
+  的分数部分）全部归最后一个窗口（如 4 GiB ÷ 3 → 1/1/2 GiB；窗口
+  不等时打 info 日志）。整 GiB 窗口边界必然按地址粒度对齐，容量
+  无损失。第一个实例分配到 0 GiB（即份额不足 1 GiB）时抛
+  `ValueError`。
+- `bandwidth`：按**总带宽**解释，`MemoryPoolConfig.__post_init__`
+  ÷instances 均分给各实例。N 实例模型的聚合峰值约为配置带宽（各
+  实例实得 bandwidth/N，并行执行）。均分目前只影响 Analytic 后端；
   Ramulator/MQSim 的带宽由器件组织/仿真决定，不消费该字段。
 - 单实例口径：`MemoryEngineConfig` 的 `capacity` 即实例容量（字节）。
 

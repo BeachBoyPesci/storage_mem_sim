@@ -73,7 +73,8 @@ def main(argv=None):
     instances = mc.get("instances", 1)
 
     # ---- build MediaConfig ----
-    # instances > 1 时 capacity 按总容量解释，MemoryPoolConfig 内部均分。
+    # instances > 1 时 capacity 按总容量解释，MemoryPool 按整 GiB 整除、
+    # 余数归最后一个实例。
     media_cfg = MediaConfig(
         media_type=backend,
         capacity=mc.get("capacity", 32.0),
@@ -176,8 +177,14 @@ def main(argv=None):
 
     capacity_gib = mc.get('capacity', 32.0)
     if use_pool:
-        print(f"Capacity:   {capacity_gib} GiB total  |  "
-              f"{capacity_gib / instances:.2f} GiB x {instances} instances")
+        total_gib = pool.total_capacity_bytes / (1024 ** 3)
+        base_gib = pool.instances[0].capacity_bytes / (1024 ** 3)
+        last_gib = pool.instances[-1].capacity_bytes / (1024 ** 3)
+        if last_gib != base_gib:
+            per = f"{base_gib:g} GiB x {instances - 1} + {last_gib:g} GiB x 1"
+        else:
+            per = f"{base_gib:g} GiB x {instances}"
+        print(f"Capacity:   {total_gib:g} GiB total  |  {per}")
     else:
         print(f"Capacity:   {capacity_gib} GiB  |  Inst: {instances}")
     if generated_workload is not None:

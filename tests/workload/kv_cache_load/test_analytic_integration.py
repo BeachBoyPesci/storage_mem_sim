@@ -93,10 +93,10 @@ def test_analytic_is_address_insensitive_for_equal_token_traffic():
 
 
 _PAGE_BYTES = 16 * 576  # page_size_tokens * token_size_bytes
+_GIB = 1024 ** 3
 
 
-def _pool(per_instance_bytes, instance_count=2, bandwidth_gib_per_sec=2.0):
-    total_gib = per_instance_bytes * instance_count / (1024 ** 3)
+def _pool(instance_count=2, per_instance_gib=1.0, bandwidth_gib_per_sec=2.0):
     # media_config.bandwidth 为总带宽口径：乘回实例数保持每实例
     # bandwidth_gib_per_sec 的测试语义。
     return MemoryPool(
@@ -105,15 +105,15 @@ def _pool(per_instance_bytes, instance_count=2, bandwidth_gib_per_sec=2.0):
             memory_type=MemoryType.HBM,
             media_config=MediaConfig(
                 media_type=MediaSystemBackend.ANALYTIC,
-                capacity=total_gib,
+                capacity=per_instance_gib * instance_count,
                 bandwidth=bandwidth_gib_per_sec * instance_count,
             ),
         )
     )
 
 
-def _contiguous_page_workload():
-    """16 个 9216 B 的整页请求，从全局地址 0 开始连续分布。"""
+def _contiguous_page_workload(base_addr=0):
+    """16 个 9216 B 的整页请求，从 *base_addr* 开始连续分布。"""
     return KVCacheLoadGenerator().generate(
         KVCacheLoadConfig(
             access_tokens=256,
@@ -122,6 +122,7 @@ def _contiguous_page_workload():
             pattern=KVAccessPattern.CONTIGUOUS,
             granularity=KVLoadGranularity.PAGE,
             page_size_tokens=16,
+            base_addr=base_addr,
         )
     )
 
@@ -134,11 +135,11 @@ def _per_engine_reqs(pool, instance_count=2):
 
 
 def test_kv_region_spans_pool_windows_page_aligned():
-    """窗口按 page 对齐时，16 个 page 请求均分到两个实例。"""
-    generated = _contiguous_page_workload()
+    """KV region 跨两个窗口且 page 与边界对齐时，请求均分到两个实例。"""
+    generated = _contiguous_page_workload(base_addr=_GIB - 8 * _PAGE_BYTES)
     assert generated.stats.logical_requests == 16
 
-    pool = _pool(per_instance_bytes=8 * _PAGE_BYTES)
+    pool = _pool()
     metrics = generated.issue(pool)
 
     assert metrics.memory_reqs_num == 16
@@ -149,12 +150,14 @@ def test_kv_region_spans_pool_windows_page_aligned():
 
 def test_kv_page_request_split_at_window_boundary():
     """page 请求横跨窗口边界时被切成两个片段，每片段各计一次。"""
-    generated = _contiguous_page_workload()
+    generated = _contiguous_page_workload(
+        base_addr=_GIB - 8 * _PAGE_BYTES - _PAGE_BYTES // 2
+    )
 
-    pool = _pool(per_instance_bytes=8 * _PAGE_BYTES + _PAGE_BYTES // 2)
+    pool = _pool()
     metrics = generated.issue(pool)
 
-    # 第 9 个 page（偏移 8*page_bytes 处）横跨窗口边界 → 多一个片段
+    # 第 9 个 page 横跨窗口边界 → 多一个片段
     assert metrics.memory_reqs_num == 17
     assert _per_engine_reqs(pool) == [9, 8]
 
