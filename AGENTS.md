@@ -270,7 +270,7 @@ python -m pytest tests/workload/kv_cache_load -m mqsim_native
 - workload 的“不合并”只约束 generator 输出。MQSim 是否继续合并由 `configs/mqsim.json` 的 `merge_contiguous` 决定，trace slice size 由同一配置的 `request_size` 决定。
 - KV CLI 状态栏中的 `Trace slice` 是 MQSim backend 参数；实际 KV 请求数以结果区的 `Requests`/`GeneratedKVCacheLoad.stats.logical_requests` 为准。
 - `MemoryEngineConfig` 的容量为**单实例口径**（`capacity`，字节）。`MemoryPoolConfig.media_config` 的 `capacity` 与 `bandwidth` 均为**总量**口径：capacity 由 pool 构建时按整 GiB 整除（余数归最后一个实例，第一个实例容量小于地址对齐粒度——即份额不足 1 GiB——时抛中文 `ValueError`）；bandwidth 在 config 初始化时 ÷instances 均分（只影响 Analytic；Ramulator/MQSim 的带宽由器件/仿真决定），N 实例各得 bandwidth/N 并行执行，聚合峰值 = 配置带宽。
-- 池级 `issue_request` 的 `time` 取各实例最大值，`bandwidth = Σbytes / max_time`（精确重算），`iops` = 各实例非 None 值的平均、`iops_max` = 最大值（IOPS 是单实例设备属性，不求和；全 None 则两者为 None）。
+- 池级 `issue_request` 的 `time` 取各实例最大值，`bandwidth = Σbytes / max_time`（精确重算），`iops` = 各实例非 None 值的平均（IOPS 是单实例设备属性，不求和；全 None 则 None）。
 - 池成员 engine 不得单独调用 `reset_addr()` 或 `get_tensor_addr()`：池的全局水位是各 engine 水位之和，绕开 pool 会破坏打包不变量（静默地址复用或 invariant 报错）。池级重置统一用 `MemoryPool.reset_addr()`。
 
 ## 相关文档

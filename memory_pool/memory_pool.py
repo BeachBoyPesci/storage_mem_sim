@@ -271,8 +271,8 @@ class MemoryPool:
         聚合：``total_time``/``cycles`` 取各实例最大值，
         ``memory_reqs_num`` 求和，``bandwidth`` = 总字节数 / 最大时间
         （精确重算）；IOPS 是单实例设备属性，不求和——``iops`` 为各
-        实例非 None 值的平均值，``iops_max`` 为最大值（全 None 时
-        两者均为 None，read/write 通道同理）。
+        实例非 None 值的平均值（全 None 时为 None，read/write 通道
+        同理）。
         """
         n = len(addr)
         if len(size) != n or len(req_type) != n:
@@ -312,24 +312,17 @@ class MemoryPool:
             if m.iops_write is not None:
                 iops_write_values.append(m.iops_write)
 
-        def _mean_max(values: List[float]):
+        def _mean(values: List[float]) -> Optional[float]:
             if not values:
-                return None, None
-            return sum(values) / len(values), max(values)
-
-        iops_mean, iops_max = _mean_max(iops_values)
-        iops_read_mean, iops_read_max = _mean_max(iops_read_values)
-        iops_write_mean, iops_write_max = _mean_max(iops_write_values)
+                return None
+            return sum(values) / len(values)
 
         return MemoryMetrics(
             cycles=total_cycles,
             total_time=total_time,
             memory_reqs_num=total_reqs,
             bandwidth=(total_bytes / total_time if total_time > 0 else 0.0),
-            iops=iops_mean,
-            iops_read=iops_read_mean,
-            iops_write=iops_write_mean,
-            iops_max=iops_max,
-            iops_read_max=iops_read_max,
-            iops_write_max=iops_write_max,
+            iops=_mean(iops_values),
+            iops_read=_mean(iops_read_values),
+            iops_write=_mean(iops_write_values),
         )

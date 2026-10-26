@@ -261,14 +261,11 @@ class TestPoolIssueRequest:
             [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
         )
         assert metrics.iops is None
-        assert metrics.iops_max is None
         assert metrics.iops_read is None
-        assert metrics.iops_read_max is None
         assert metrics.iops_write is None
-        assert metrics.iops_write_max is None
 
-    def test_pool_iops_mean_and_max(self):
-        """IOPS 是单实例设备属性：池级报告各实例的平均值和最大值。"""
+    def test_pool_iops_mean(self):
+        """IOPS 是单实例设备属性：池级报告各实例非 None 值的平均值。"""
         class _FakeMedia:
             def __init__(self, iops):
                 self._iops = iops
@@ -290,14 +287,11 @@ class TestPoolIssueRequest:
             [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
         )
         assert metrics.iops == 750.0
-        assert metrics.iops_max == 1000.0
         assert metrics.iops_read == 750.0
-        assert metrics.iops_read_max == 1000.0
         assert metrics.iops_write == 750.0
-        assert metrics.iops_write_max == 1000.0
 
     def test_pool_iops_ignores_none_instances(self):
-        """部分实例不报告 IOPS 时，只对非 None 的实例取平均和最大。"""
+        """部分实例不报告 IOPS 时，只对非 None 的实例取平均。"""
         class _FakeMedia:
             def __init__(self, iops):
                 self._iops = iops
@@ -315,9 +309,7 @@ class TestPoolIssueRequest:
             [MemoryRequestType.KREAD, MemoryRequestType.KREAD],
         )
         assert metrics.iops == 1000.0
-        assert metrics.iops_max == 1000.0
         assert metrics.iops_read is None
-        assert metrics.iops_read_max is None
 
 
 class TestPoolFactory:

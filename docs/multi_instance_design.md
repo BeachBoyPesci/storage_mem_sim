@@ -246,9 +246,8 @@ def issue_request(
    - `total_time` / `cycles` = 各实例最大值；
    - `memory_reqs_num` = 各实例求和（跨界请求的每个片段各计一次）；
    - `bandwidth = Σbytes / max_time`（精确重算）；
-   - `iops`/`iops_read`/`iops_write` = 各实例非 None 值的平均值，
-     对应 `iops_max` 等 = 最大值（全 None 则为 None）。IOPS 是单
-     实例设备属性，池级不求和。
+   - `iops`/`iops_read`/`iops_write` = 各实例非 None 值的平均值
+     （全 None 则为 None）。IOPS 是单实例设备属性，池级不求和。
 
 `get_tensor_addr` 返回全局起始地址；数据先通过它分配，
 后续读写使用该全局地址。所属实例由地址窗口算术确定

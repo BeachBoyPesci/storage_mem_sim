@@ -19,8 +19,6 @@ class MemoryMetrics:
         iops: MQSim 报告的端到端设备 IOPS；当所选 backend
               不提供该指标时为 None。pool 聚合时为各实例非 None
               值的平均值（IOPS 是单实例设备属性，不求和）。
-        iops_max / iops_read_max / iops_write_max: pool 聚合时各实例
-              对应 IOPS 的最大值；单 engine 路径为 None。
         bandwidth: 带宽，单位为字节/秒（来自介质 backend）。
     """
     cycles: int = 0
@@ -30,9 +28,6 @@ class MemoryMetrics:
     iops: Optional[float] = None
     iops_read: Optional[float] = None
     iops_write: Optional[float] = None
-    iops_max: Optional[float] = None
-    iops_read_max: Optional[float] = None
-    iops_write_max: Optional[float] = None
 
 @dataclass
 class MemoryEngineMetrics:
