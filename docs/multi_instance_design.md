@@ -301,8 +301,8 @@ def issue_request(
   整除：前 n-1 个实例窗口各 ⌊total ÷ n⌋ GiB，余数（含不足 1 GiB
   的分数部分）全部归最后一个窗口（如 4 GiB ÷ 3 → 1/1/2 GiB；窗口
   不等时打 info 日志）。整 GiB 窗口边界必然按地址粒度对齐，容量
-  无损失。第一个实例分配到 0 GiB（即份额不足 1 GiB）时抛
-  `ValueError`。
+  无损失。第一个实例容量小于地址对齐粒度（整 GiB 整除下即份额
+  不足 1 GiB）时抛 `ValueError`。
 - `bandwidth`：按**总带宽**解释，`MemoryPoolConfig.__post_init__`
   ÷instances 均分给各实例。N 实例模型的聚合峰值约为配置带宽（各
   实例实得 bandwidth/N，并行执行）。均分目前只影响 Analytic 后端；

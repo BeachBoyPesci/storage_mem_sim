@@ -63,13 +63,27 @@ class TestPoolAddressWindows:
         assert pool.global_addr == 4 * _GIB
 
     def test_sub_gib_per_instance_share_rejected(self):
-        """整 GiB 整除：第一个实例分配到 0 GiB（份额不足 1 GiB）时报错。"""
+        """整 GiB 整除：第一个实例份额不足 1 GiB（容量 < 粒度）时报错。"""
         config = MemoryPoolConfig(
             instance_count=2,
             memory_type=MemoryType.HBM,
             media_config=MediaConfig(
                 media_type=MediaSystemBackend.ANALYTIC,
                 capacity=1.5,
+                bandwidth=100.0,
+            ),
+        )
+        with pytest.raises(ValueError, match="第一个 engine"):
+            MemoryPool(config)
+
+    def test_sub_granularity_first_window_rejected(self):
+        """单实例池容量小于地址粒度（64 B）时同样报错。"""
+        config = MemoryPoolConfig(
+            instance_count=1,
+            memory_type=MemoryType.HBM,
+            media_config=MediaConfig(
+                media_type=MediaSystemBackend.ANALYTIC,
+                capacity=32 / _GIB,  # 32 B < 64 B 粒度
                 bandwidth=100.0,
             ),
         )

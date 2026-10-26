@@ -26,8 +26,9 @@ class MemoryPoolConfig:
         media_config: 介质后端配置。``capacity`` 按**总容量**（GiB）
                       解释：``MemoryPool`` 构建时按整 GiB 整除，前
                       n-1 个实例各 ⌊total ÷ n⌋ GiB，余数全部归最后
-                      一个实例；第一个实例分配到 0 GiB（即份额不足
-                      1 GiB）时抛 ``ValueError``。``bandwidth`` 也按
+                      一个实例；第一个实例容量小于地址对齐粒度
+                      （整 GiB 整除下即份额不足 1 GiB）时抛
+                      ``ValueError``。``bandwidth`` 也按
                       **总量**口径解释：``__post_init__`` 将其均分为
                       每实例值（bandwidth ÷ instance_count）后写回，
                       聚合峰值 = 配置带宽；均分只影响 Analytic 后端
@@ -103,13 +104,6 @@ class MemoryPool:
         )
         base_gib = int(total_gib / n)
         last_gib = total_gib - base_gib * (n - 1)
-        first_gib = base_gib if n > 1 else last_gib
-        if first_gib == 0:
-            raise ValueError(
-                f"第一个 engine 分配到了 0 GiB：总容量 {total_gib} GiB "
-                f"按整 GiB 整除给 {n} 个实例时，每个实例至少需分到 "
-                f"1 GiB；请增大 capacity 或减少 instances"
-            )
         if n > 1 and last_gib != base_gib:
             logger.info(
                 "MemoryPool: %.4f GiB over %d instances: base windows "
@@ -128,6 +122,18 @@ class MemoryPool:
             )
             from ..memory_engine import MemoryEngine
             engine = MemoryEngine(cfg)
+            if idx == 0:
+                # 第一个窗口至少要容得下一个粒度单位：整 GiB 整除下即
+                # base_gib == 0（份额不足 1 GiB）；单实例池也可能配置
+                # 出亚粒度容量。
+                gran = engine.mem_config.granularity
+                if engine.capacity_bytes < gran:
+                    raise ValueError(
+                        f"第一个 engine 的容量 {engine.capacity_bytes} B "
+                        f"小于地址对齐粒度 {gran} B（总容量 "
+                        f"{int(total_gib * 1024 ** 3)} B ÷ {n} 个实例）；"
+                        f"请增大 capacity 或减少 instances"
+                    )
             engine.instance_id = idx
             engine.global_base = base
             self._engines.append(engine)
